@@ -20,6 +20,7 @@ or held-out data before it is believed.
 | [`nb1/`](nb1) | Three functional cell classes ("early/middle/late") | k-means imposes discrete clusters on a smooth continuum |
 | [`nb2/`](nb2) | Orientation tuning reduced by a manipulation | Circular analysis / double dipping — selecting the preferred stimulus on the same data (fake difference for real tuning; fake tuning from noise) |
 | [`nb3/`](nb3) | A reliable temporal sequence of firing | Sorting neurons by peak time manufactures a diagonal — you must cross-validate sorted plots |
+| [`nb4/`](nb4) | A population that decodes a task "block" variable | Ordinary cross-validation is fooled by slow drift when decoding a slowly-varying variable — use held-out blocks / pseudosessions |
 
 ## How each exercise is organized
 
