@@ -1,0 +1,15 @@
+# Copyrighted / identifying source material — do NOT publish
+_refs/
+
+# Python / Jupyter cruft
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.virtual_documents/
+
+# Stale/orphan data file from an earlier version of nb2
+nb2/data/spikes.npz
+
+# OS / editor
+.DS_Store
+Thumbs.db

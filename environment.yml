@@ -1,0 +1,13 @@
+name: goodanalysis
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.11
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - jupyter
+  # only needed to rebuild notebooks from build_notebooks.py:
+  - nbformat
+  - nbclient
