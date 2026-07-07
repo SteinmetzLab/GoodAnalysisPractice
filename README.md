@@ -49,3 +49,8 @@ also `pip install nbformat nbclient`.)
 
 These are teaching materials; the data are synthetic and generated with fixed
 seeds so results are reproducible. Suggestions and new pitfalls are welcome.
+
+## Development
+
+These training materials were developed by Nick Steinmetz using Claude Code
+(Opus 4.8).

@@ -83,7 +83,8 @@ student.append(new_markdown_cell("""\
 ## Step 1 — Trial-average, smooth, and look at the population
 """))
 student.append(new_code_cell("""\
-X = smooth(activity.mean(axis=2))         # trial-averaged, smoothed activity
+X = activity.mean(axis=2)                 # average over trials -> (neuron, time)
+X = smooth(X)                             # smooth each neuron's trace along time
 
 fig, ax = plt.subplots(figsize=(5, 5))
 im = show_seq(ax, X, time, title='Trial-averaged activity (unsorted)')
@@ -98,9 +99,10 @@ student.append(new_markdown_cell("""\
 Find each neuron's time of peak activity and re-order the population by it.
 """))
 student.append(new_code_cell("""\
-peak_bin = X.argmax(axis=1)
-order = np.argsort(peak_bin)
+peak_bin = X.argmax(axis=1)      # for each neuron, the time bin of its largest value
+order = np.argsort(peak_bin)     # neuron indices ordered from earliest to latest peak
 
+# Re-order the rows of the matrix by that ranking and display it.
 fig, axes = plt.subplots(1, 2, figsize=(11, 5))
 show_seq(axes[0], X[order], time, cmap='viridis', title='Sorted by peak time')
 show_seq(axes[1], X[order], time, cmap='jet',     title='...and now with jet!')
@@ -140,8 +142,8 @@ solution.append(new_code_cell(PREAMBLE))
 solution.append(new_code_cell(LOAD))
 solution.append(new_code_cell("""\
 # Reproduce the student's sorted plot.
-X = smooth(activity.mean(axis=2))
-order = np.argsort(X.argmax(axis=1))
+X = smooth(activity.mean(axis=2))          # trial-averaged, smoothed activity
+order = np.argsort(X.argmax(axis=1))       # sort neurons by their peak time
 """))
 
 solution.append(new_markdown_cell("""\
@@ -154,7 +156,7 @@ still march down the diagonal. It doesn't -- it's back to noise.
 solution.append(new_code_cell("""\
 train = smooth(activity[:, :, 0::2].mean(axis=2))   # odd trials: choose the order
 test  = smooth(activity[:, :, 1::2].mean(axis=2))   # even trials: display these
-order_train = np.argsort(train.argmax(axis=1))
+order_train = np.argsort(train.argmax(axis=1))      # sort order from TRAIN only
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
 show_seq(axes[0], X[order], time, title='Naive: sort & display the SAME data')
@@ -175,8 +177,9 @@ diagonal). Instead they are unrelated.
 """))
 solution.append(new_code_cell("""\
 from scipy.stats import spearmanr
-pa = train.argmax(1) * dt
-pb = test.argmax(1) * dt
+pa = train.argmax(1) * dt        # each neuron's peak time (s), estimated from trials A
+pb = test.argmax(1) * dt         # and independently from trials B
+# rank correlation of the two estimates: ~1 for a real sequence, ~0 for noise
 rho = spearmanr(pa, pb).correlation
 
 fig, ax = plt.subplots(figsize=(4.6, 4.6))
@@ -199,8 +202,8 @@ diagonal is a property of peak-sorting, not of these particular neurons.
 """))
 solution.append(new_code_cell("""\
 rng = np.random.default_rng(0)
-fresh = smooth(rng.normal(0, 1, size=(n_neurons, n_time)))
-fresh_order = np.argsort(fresh.argmax(1))
+fresh = smooth(rng.normal(0, 1, size=(n_neurons, n_time)))  # brand-new noise matrix
+fresh_order = np.argsort(fresh.argmax(1))                   # sort it by peak time too
 
 fig, ax = plt.subplots(figsize=(5, 5))
 show_seq(ax, fresh[fresh_order], time, title='Fresh noise, sorted by peak time')

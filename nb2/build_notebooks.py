@@ -94,14 +94,18 @@ direction from the control condition, and align both conditions to it.
 """))
 
 student.append(new_code_cell("""\
-rate = counts / duration
-mean_rate = rate.mean(axis=3)                       # (neuron, ori, condition)
+rate = counts / duration                  # spike counts -> firing rate (spikes/s)
+mean_rate = rate.mean(axis=3)             # average over trials -> (neuron, ori, condition)
 
+# Each neuron's preferred direction = the direction with the largest CONTROL
+# response, then circularly shift every neuron so its preferred direction sits
+# at the center column (so the curves can be averaged across neurons).
 pref_idx = preferred_ori(mean_rate[:, :, CONTROL])
 aligned_control = roll_to_center(mean_rate[:, :, CONTROL], pref_idx)
 aligned_test    = roll_to_center(mean_rate[:, :, TEST],    pref_idx)
 
 center = n_ori // 2
+# x-axis in degrees relative to the preferred direction (0 = preferred)
 rel_ori = (np.arange(n_ori) - center) * (orientations[1] - orientations[0])
 """))
 
@@ -121,6 +125,8 @@ ax.set_title('Mean tuning (n = %d)' % n_neurons)
 ax.legend(frameon=False)
 plt.show()
 
+# Compare the two conditions at the preferred direction (the center column),
+# neuron by neuron, with a paired non-parametric test.
 p_ctrl = aligned_control[:, center]; p_test = aligned_test[:, center]
 w = wilcoxon(p_ctrl, p_test)
 print(f'Firing rate at preferred direction:')
@@ -202,17 +208,19 @@ tuning on *independent* data -- the held-out control trials and the test trials
 """))
 
 solution.append(new_code_cell("""\
+# Average the held-out tuning over many random half-splits of the trials
+# (ordinary cross-validation). accC/accT accumulate the aligned curves.
 n_splits = 60
 half = n_trials // 2
 accC = np.zeros((n_neurons, n_ori)); accT = np.zeros((n_neurons, n_ori))
 for _ in range(n_splits):
-    perm = rng.permutation(n_trials)
+    perm = rng.permutation(n_trials)                    # random split of trials
     pick = rate[:, :, CONTROL, perm[:half]].mean(2)     # choose pref here...
     read = rate[:, :, CONTROL, perm[half:]].mean(2)     # ...read control here
     pk = preferred_ori(pick)
     accC += roll_to_center(read, pk)
     accT += roll_to_center(mean_rate[:, :, TEST], pk)   # test never used to pick
-cvC = accC / n_splits; cvT = accT / n_splits
+cvC = accC / n_splits; cvT = accT / n_splits            # mean held-out tuning curves
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
 for ax, title, cc, ct in [
@@ -252,6 +260,8 @@ jumps to test: now test > control. The bias lands on whatever you selected with.
 """))
 
 solution.append(new_code_cell("""\
+# Same as before, but now choose each neuron's preferred direction from the
+# TEST condition, and align both conditions to that instead.
 pref_test = preferred_ori(mean_rate[:, :, TEST])
 sw_control = roll_to_center(mean_rate[:, :, CONTROL], pref_test)
 sw_test    = roll_to_center(mean_rate[:, :, TEST],    pref_test)
@@ -280,16 +290,20 @@ tuning shrinks it but does not remove it.
 """))
 
 solution.append(new_code_cell("""\
+# Simulate tuned neurons with a given tuning width (kappa) and NO real
+# control/test difference, then measure the fake control-minus-test gap that
+# selection produces. Larger kappa = sharper tuning.
 def spurious_gap(kappa, reps=200, baseline=1.0, amp=4.0):
     theta = np.deg2rad(np.arange(n_ori) * 30)
     gaps = []
     for _ in range(reps):
-        phi = rng.uniform(0, 2*np.pi, n_neurons)
-        tun = baseline + amp*np.exp(kappa*(np.cos(theta[None,:]-phi[:,None])-1))
+        phi = rng.uniform(0, 2*np.pi, n_neurons)            # random preferred dir per neuron
+        tun = baseline + amp*np.exp(kappa*(np.cos(theta[None,:]-phi[:,None])-1))  # von Mises tuning
+        # two independent Poisson draws from the SAME tuning (control, test):
         C = rng.poisson(tun[:,:,None]*duration, size=(n_neurons,n_ori,n_trials)).mean(2)/duration
         T = rng.poisson(tun[:,:,None]*duration, size=(n_neurons,n_ori,n_trials)).mean(2)/duration
-        pk = preferred_ori(C); rows = np.arange(n_neurons)
-        gaps.append(C[rows,pk].mean() - T[rows,pk].mean())
+        pk = preferred_ori(C); rows = np.arange(n_neurons)  # pick pref from control
+        gaps.append(C[rows,pk].mean() - T[rows,pk].mean())  # gap at that direction
     return np.mean(gaps)
 
 kappas = [8, 4, 2, 1, 0.5]
@@ -317,14 +331,15 @@ entirely manufactured.
 """))
 
 solution.append(new_code_cell("""\
+# Exactly the same pipeline as the student notebook, now on the untuned data.
 counts, duration, orientations, condition_names = load('data/untuned.npz')
 n_neurons, n_ori, n_cond, n_trials = counts.shape
 rate = counts / duration
-mean_rate = rate.mean(axis=3)
+mean_rate = rate.mean(axis=3)                        # trial-averaged rate
 center = n_ori // 2
 rel_ori = (np.arange(n_ori) - center) * (orientations[1] - orientations[0])
 
-pref_idx = preferred_ori(mean_rate[:, :, CONTROL])
+pref_idx = preferred_ori(mean_rate[:, :, CONTROL])  # pref direction from control
 aligned_control = roll_to_center(mean_rate[:, :, CONTROL], pref_idx)
 aligned_test    = roll_to_center(mean_rate[:, :, TEST],    pref_idx)
 print(f'naive: control@pref={aligned_control[:,center].mean():.2f}  '
@@ -403,12 +418,14 @@ so independent selection flattens **everything**.
 """))
 
 solution.append(new_code_cell("""\
+# Same cross-validation as Act 1: pick pref on one half of trials, read the
+# other half, average over many random splits.
 n_splits = 60; half = n_trials // 2
 accC = np.zeros((n_neurons, n_ori))
 for _ in range(n_splits):
     perm = rng.permutation(n_trials)
-    pick = rate[:, :, CONTROL, perm[:half]].mean(2)
-    read = rate[:, :, CONTROL, perm[half:]].mean(2)
+    pick = rate[:, :, CONTROL, perm[:half]].mean(2)     # choose pref here
+    read = rate[:, :, CONTROL, perm[half:]].mean(2)     # read out here (independent)
     accC += roll_to_center(read, preferred_ori(pick))
 cvC = accC / n_splits
 
@@ -438,8 +455,11 @@ bigger manufactured peak.
 
 solution.append(new_code_cell("""\
 lam = 1.0
+# Simulate untuned neurons observed for a given total counting time (split into
+# n_tr trials) and return the apparent peak rate after selecting the argmax
+# direction. This isolates how the artifact scales with total spikes collected.
 def apparent_peak(total_time, n_tr=1, reps=300):
-    window = total_time / n_tr
+    window = total_time / n_tr                          # per-trial counting window
     peaks = []
     for _ in range(reps):
         r = rng.poisson(lam*window, size=(n_neurons, n_ori, n_tr)).mean(2)/window

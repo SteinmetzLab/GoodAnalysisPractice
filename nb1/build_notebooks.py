@@ -102,11 +102,14 @@ keeping the k with the best score.
 student_cells.append(new_code_cell("""\
 from sklearn.metrics import silhouette_score
 
+# For each candidate number of clusters k, run k-means and score the result
+# with the silhouette (how much tighter points sit to their own cluster than to
+# the nearest other cluster; higher = more clustered). Keep the k that scores best.
 candidate_ks = range(2, 9)
 sil = {kk: silhouette_score(activity,
         KMeans(n_clusters=kk, n_init=10, random_state=0).fit_predict(activity))
        for kk in candidate_ks}
-best_k = max(sil, key=sil.get)
+best_k = max(sil, key=sil.get)          # the k with the highest silhouette score
 print(f'Silhouette analysis selects k = {best_k} clusters.')
 """))
 
@@ -120,14 +123,15 @@ course as a feature vector and run k-means with `k = 3`.
 student_cells.append(new_code_cell("""\
 k = 3
 km = KMeans(n_clusters=k, n_init=10, random_state=0)
-labels = km.fit_predict(activity)
+labels = km.fit_predict(activity)       # assign each neuron to one of k clusters
 
-# Order clusters by the time of their peak mean activity, so we can label
-# them early -> middle -> late.
+# Relabel the clusters so 0/1/2 run early -> middle -> late in time. This is
+# purely cosmetic (a consistent naming); it does not change the clustering.
+# For each cluster, take the mean trace and find the time bin of its peak:
 peak_of_mean = np.array([activity[labels == c].mean(0).argmax() for c in range(k)])
-order = np.argsort(peak_of_mean)
+order = np.argsort(peak_of_mean)        # cluster indices sorted by peak time
 relabel = np.zeros(k, dtype=int)
-relabel[order] = np.arange(k)
+relabel[order] = np.arange(k)           # earliest-peaking cluster -> label 0, etc.
 labels = relabel[labels]
 
 for c in range(k):
@@ -172,7 +176,8 @@ cbar.set_label('activity (a.u.)')
 # --- Right column: mean +/- SEM trace per cluster ---
 ax = fig.add_subplot(gs[:, 1])
 for c in range(k):
-    m = activity[labels == c].mean(0)
+    m = activity[labels == c].mean(0)   # average trace across neurons in cluster c
+    # standard error of that mean at each time point (std across neurons / sqrt(n))
     sem = activity[labels == c].std(0) / np.sqrt((labels == c).sum())
     ax.plot(time, m, color=colors[c], lw=2, label=cluster_label(c, k))
     ax.fill_between(time, m - sem, m + sem, color=colors[c], alpha=0.3)
@@ -224,6 +229,7 @@ from scipy.ndimage import gaussian_filter1d
 
 k = 3
 labels = KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(activity)
+# Relabel clusters early -> middle -> late by their mean-trace peak (cosmetic).
 peak_of_mean = np.array([activity[labels == c].mean(0).argmax() for c in range(k)])
 order = np.argsort(peak_of_mean)
 relabel = np.zeros(k, dtype=int); relabel[order] = np.arange(k)
@@ -241,8 +247,10 @@ were three response classes, the distribution of peak times would be
 """))
 
 solution_cells.append(new_code_cell("""\
+# Lightly smooth each neuron's trace in time, then take the time of its maximum
+# as an estimate of that neuron's "peak time" (argmax over the time axis).
 smoothed = gaussian_filter1d(activity, sigma=2.0, axis=1)
-peak_time_est = time[smoothed.argmax(1)]
+peak_time_est = time[smoothed.argmax(1)]   # peak time (in s) for each neuron
 
 fig, ax = plt.subplots(figsize=(6, 3.5))
 for c in range(k):
@@ -277,7 +285,7 @@ sweep — a continuum, with no block boundaries.
 """))
 
 solution_cells.append(new_code_cell("""\
-sort_idx = np.argsort(peak_time_est)
+sort_idx = np.argsort(peak_time_est)    # neuron order from earliest to latest peak
 vmin = np.percentile(activity, 2)
 vmax = np.percentile(activity, 99)
 
@@ -310,10 +318,10 @@ the arch *is* the peak-time axis.
 
 solution_cells.append(new_code_cell("""\
 # PCA via SVD (no sklearn needed).
-Xc = activity - activity.mean(0)
+Xc = activity - activity.mean(0)                 # center each time point (column)
 U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
-pcs = U * S
-var_exp = S**2 / np.sum(S**2)
+pcs = U * S                                      # each neuron's coordinates in PC space
+var_exp = S**2 / np.sum(S**2)                    # fraction of variance per PC
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
