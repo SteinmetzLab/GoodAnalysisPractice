@@ -71,9 +71,7 @@ figure below.
 Run it and you'll see a beautiful diagonal sweep.
 
 **The claim is not supported by this analysis.** Work out *why*. Sit with it
-first. A good question: the sort order was chosen using this same data -- what
-would happen to the diagonal if you checked it against data that wasn't used to
-choose the order? `hints.md` has more, and `notebook3_solution.ipynb` has the
+first. `hints.md` has guiding questions, and `notebook3_solution.ipynb` has the
 answer.
 """))
 student.append(new_code_cell(PREAMBLE))

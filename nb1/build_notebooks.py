@@ -81,9 +81,7 @@ final figure.
 look at the figure, and then work out what is really going on in these data.
 
 Sit with it for a while before looking anything up — the goal is to build the
-instinct to interrogate a result like this yourself. A couple of things you can
-try right here: change `k = 3` to `k = 4` or `5` and re-run, or re-plot the data
-in a way that doesn't assume a number of groups. If you get stuck, `hints.md`
+instinct to interrogate a result like this yourself. If you get stuck, `hints.md`
 has some guiding questions and `notebook1_solution.ipynb` has the full answer —
 but get as far as you can on your own first.
 """))

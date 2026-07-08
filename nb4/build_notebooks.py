@@ -82,10 +82,8 @@ cross-validation:
 
 Run it and you'll get ~95%.
 
-**The claim is not supported by this analysis.** Work out *why*. A hint to sit
-with: the block variable changes slowly (it is constant for tens of trials in a
-row). What does ordinary k-fold cross-validation do with a *slow* variable?
-`hints.md` has more; `notebook4_solution.ipynb` has the answer.
+**The claim is not supported by this analysis.** Work out *why*. `hints.md` has
+guiding questions; `notebook4_solution.ipynb` has the answer.
 """))
 student.append(new_code_cell(PREAMBLE))
 student.append(new_code_cell("""\
@@ -100,34 +98,34 @@ print(f'{n_neurons} neurons x {n_trials} trials')
 """))
 
 student.append(new_markdown_cell("""\
-## The data
+## The block variable
+
+The block alternates `+1 / -1`; each block's length is drawn uniformly from
+30-70 trials, and the first block's sign is random. Here is the block sequence
+for this session:
 """))
 student.append(new_code_cell("""\
-fig, axes = plt.subplots(2, 1, figsize=(9, 4.5), sharex=True,
-                         gridspec_kw={'height_ratios': [1, 3]})
-axes[0].plot(block_values, '.-', ms=3, color='k')
-axes[0].set_ylabel('block'); axes[0].set_yticks([-1, 1])
-im = axes[1].imshow(activity, aspect='auto', cmap='magma',
-                    extent=[0, n_trials, n_neurons, 0])
-axes[1].set_xlabel('trial'); axes[1].set_ylabel('neuron')
-plt.colorbar(im, ax=axes[1], label='activity', orientation='vertical', fraction=0.03)
-plt.tight_layout()
-plt.show()
+plt.figure(figsize=(9, 1.8))
+plt.plot(block_values, '.-', ms=3, color='k')
+plt.xlabel('trial'); plt.ylabel('block'); plt.yticks([-1, 1])
+plt.title('block variable across the session'); plt.show()
+
+# The same generative process is available as a function (draw a fresh sequence):
+example_blocks, _ = make_blocks(np.random.default_rng(1))
 """))
 
 student.append(new_markdown_cell("""\
-## How the block sequence was generated
+## The neural data
 
-Blocks alternate `+1 / -1`; each block's length is drawn uniformly from 30-70
-trials; the first block's sign is random. In code:
+The activity of the 100 neurons across the same trials:
 """))
 student.append(new_code_cell("""\
-# Example of the generative process (also handy later): draw a block sequence.
-example_blocks, _ = make_blocks(np.random.default_rng(1))
-plt.figure(figsize=(9, 1.6))
-plt.plot(example_blocks, '.-', ms=3, color='0.4')
-plt.xlabel('trial'); plt.ylabel('block'); plt.yticks([-1, 1])
-plt.title('a randomly generated block sequence'); plt.show()
+fig, ax = plt.subplots(figsize=(9, 3.6))
+im = ax.imshow(activity, aspect='auto', cmap='magma',
+               extent=[0, n_trials, n_neurons, 0])
+ax.set_xlabel('trial'); ax.set_ylabel('neuron')
+plt.colorbar(im, ax=ax, label='activity', fraction=0.03)
+plt.show()
 """))
 
 student.append(new_markdown_cell("""\
@@ -136,6 +134,17 @@ student.append(new_markdown_cell("""\
 student.append(new_code_cell("""\
 acc = trialwise_cv(X, y)      # standard k-fold CV over trials
 print(f'Trial-wise cross-validated decoding accuracy: {acc*100:.1f}%  (chance = 50%)')
+
+# Out-of-fold prediction for every trial (each trial is predicted while held out)
+pred = cross_val_predict(LinearDiscriminantAnalysis(), X, y,
+                         cv=KFold(10, shuffle=True, random_state=0))
+fig, ax = plt.subplots(figsize=(9, 2.2))
+ax.plot(y, '-', color='0.8', lw=5, label='true block')
+ax.plot(pred, '.', color='tab:red', ms=4, label='cross-validated prediction')
+ax.set_xlabel('trial'); ax.set_ylabel('block'); ax.set_yticks([-1, 1])
+ax.set_title(f'Predicted block tracks the true block ({acc*100:.1f}% correct)')
+ax.legend(frameon=False, loc='center right', fontsize=8)
+plt.show()
 """))
 
 student.append(new_markdown_cell("""\
