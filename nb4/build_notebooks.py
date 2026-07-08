@@ -135,15 +135,27 @@ student.append(new_code_cell("""\
 acc = trialwise_cv(X, y)      # standard k-fold CV over trials
 print(f'Trial-wise cross-validated decoding accuracy: {acc*100:.1f}%  (chance = 50%)')
 
-# Out-of-fold prediction for every trial (each trial is predicted while held out)
-pred = cross_val_predict(LinearDiscriminantAnalysis(), X, y,
-                         cv=KFold(10, shuffle=True, random_state=0))
-fig, ax = plt.subplots(figsize=(9, 2.2))
-ax.plot(y, '-', color='0.8', lw=5, label='true block')
-ax.plot(pred, '.', color='tab:red', ms=4, label='cross-validated prediction')
-ax.set_xlabel('trial'); ax.set_ylabel('block'); ax.set_yticks([-1, 1])
-ax.set_title(f'Predicted block tracks the true block ({acc*100:.1f}% correct)')
-ax.legend(frameon=False, loc='center right', fontsize=8)
+# Out-of-fold outputs for every trial (each trial is predicted while held out):
+cv = KFold(10, shuffle=True, random_state=0)
+pred  = cross_val_predict(LinearDiscriminantAnalysis(), X, y, cv=cv)                         # class (+/-1)
+score = cross_val_predict(LinearDiscriminantAnalysis(), X, y, cv=cv, method='decision_function')  # continuous
+correct = pred == y
+
+fig, axes = plt.subplots(2, 1, figsize=(9, 4.2), sharex=True)
+# (top) binary prediction vs true block, colored by whether it is correct
+axes[0].plot(y, '-', color='0.85', lw=5, label='true block')
+axes[0].plot(np.where(correct)[0], pred[correct], '.', color='tab:green', ms=4, label='correct')
+axes[0].plot(np.where(~correct)[0], pred[~correct], '.', color='tab:red', ms=6, label='incorrect')
+axes[0].set_ylabel('block'); axes[0].set_yticks([-1, 1])
+axes[0].set_title(f'Cross-validated prediction ({acc*100:.1f}% correct)')
+axes[0].legend(frameon=False, loc='center right', fontsize=8)
+# (bottom) the continuous decoder output (before thresholding at 0)
+axes[1].scatter(np.where(correct)[0], score[correct], color='tab:green', s=8)
+axes[1].scatter(np.where(~correct)[0], score[~correct], color='tab:red', s=14)
+axes[1].axhline(0, color='k', lw=0.8)
+axes[1].set_xlabel('trial'); axes[1].set_ylabel('decoder output')
+axes[1].set_title('Continuous decoder output (sign gives the prediction; errors sit near 0)')
+plt.tight_layout()
 plt.show()
 """))
 

@@ -90,6 +90,23 @@ student_cells.append(new_code_cell(PREAMBLE))
 student_cells.append(new_code_cell(LOAD))
 
 student_cells.append(new_markdown_cell("""\
+## The raw data
+
+Each row is a neuron, each column a time bin. This is the matrix everything
+below is computed from.
+"""))
+student_cells.append(new_code_cell("""\
+fig, ax = plt.subplots(figsize=(6, 5))
+im = ax.imshow(activity, aspect='auto', cmap=HEAT_CMAP,
+               vmin=np.percentile(activity, 2), vmax=np.percentile(activity, 99),
+               extent=[time[0], time[-1], n_neurons, 0])
+ax.set_xlabel('time (s)'); ax.set_ylabel('neuron')
+ax.set_title('Activity matrix (unsorted)')
+plt.colorbar(im, ax=ax, label='activity (a.u.)')
+plt.show()
+"""))
+
+student_cells.append(new_markdown_cell("""\
 ## Step 1 — How many clusters?
 
 Rather than pick a number by hand, we use **silhouette analysis** — a standard,
