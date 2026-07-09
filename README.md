@@ -21,6 +21,9 @@ or held-out data before it is believed.
 | [`nb2/`](nb2) | Orientation tuning reduced by a manipulation | Circular analysis / double dipping — selecting the preferred stimulus on the same data (fake difference for real tuning; fake tuning from noise) |
 | [`nb3/`](nb3) | A reliable temporal sequence of firing | Sorting neurons by peak time manufactures a diagonal — you must cross-validate sorted plots |
 | [`nb4/`](nb4) | A population that decodes a task "block" variable | Ordinary cross-validation is fooled by slow drift when decoding a slowly-varying variable — use held-out blocks / pseudosessions |
+| [`nb5/`](nb5) | Arousal increases firing rate | Simpson's paradox — pooling across sessions reverses the within-session relationship |
+| [`nb6/`](nb6) | An event increases firing ~30% over baseline | Averaging per-neuron ratios is biased upward (Jensen) — baseline normalization invents an increase |
+| [`nb7/`](nb7) | 600 neurons encode the condition (p≈1e-13) | Correlated observations / pseudo-replication — the unit of analysis is the session, not the neuron |
 
 ## How each exercise is organized
 

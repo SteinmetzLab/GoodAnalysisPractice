@@ -70,9 +70,8 @@ figure below.
 
 Run it and you'll see a beautiful diagonal sweep.
 
-**The claim is not supported by this analysis.** Work out *why*. Sit with it
-first. `hints.md` has guiding questions, and `notebook3_solution.ipynb` has the
-answer.
+**The claim is not supported by this analysis.** Work out *why*. `hints.md` has
+guiding questions, and `notebook3_solution.ipynb` has the answer.
 """))
 student.append(new_code_cell(PREAMBLE))
 student.append(new_code_cell(LOAD))

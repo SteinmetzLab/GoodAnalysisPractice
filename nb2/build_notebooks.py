@@ -72,9 +72,8 @@ ran the standard tuning analysis below and concluded:
 Run the analysis — you'll reproduce exactly that.
 
 **The key conclusion (the reduction) is not supported by this analysis.** Your
-job is to work out *why*. Sit with it before looking anything up. If you get
-stuck, `hints.md` has guiding questions and `notebook2_solution.ipynb` has the
-answer.
+job is to work out *why*. If you get stuck, `hints.md` has guiding questions and
+`notebook2_solution.ipynb` has the answer.
 """))
 
 student.append(new_code_cell(PREAMBLE))
