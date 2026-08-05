@@ -29,10 +29,18 @@ are generated independently of both the pupil and the block.**
    clickable panel that overlays any neuron on the pupil trace
 6. A control that **fails**: shuffle each neuron's timecourse
 7. Controls that **work**: circular shift; another session's pupil trace
-8. **Test 2** — decode the block variable with ordinary k-fold CV; one fold shown
+8. **How many independent samples do you actually have?** — Bartlett's effective
+   *n* from the two autocorrelations, cross-checked against the width of the
+   circular-shift null, and the honest correlation threshold that follows
+9. **Test 2** — decode the block variable with ordinary k-fold CV; one fold shown
    with 90% training trials in black and the held-out 10% in green/red
-9. The same failing control: shuffle each neuron's timecourse
-10. Controls that **work**: pseudosessions; leave-one-block-out
+10. The same failing control: shuffle each neuron's timecourse
+11. Controls that **work**: pseudosessions; leave-one-block-out
+12. **Do these controls still find real effects?** — 20 neurons given a genuine
+    pupil drive (power vs. false positives for all three tests, as a function of
+    effect size), and a population given genuine block coding
+13. **How bad is it, as a function of the fluctuation timescale?** — both tests
+    swept over timescales from 1 s to 50 s
 
 ## Realized numbers (seed 7, 511 trials)
 | | result |
@@ -44,10 +52,36 @@ are generated independently of both the pupil and the block.**
 | after shuffling trials | 7 / 100 |
 | vs circular-shift null | 4 / 100 |
 | vs session-permutation null | 8 / 100 |
+| effective *n* (Bartlett, median over neurons) | **21** — and 15 from 1/var of the circular-shift null |
+| honest \|r\| threshold at n=21 | **0.429** → 9 / 100 neurons significant |
 | block decoding, trial-wise CV | **81.4%** |
 | trial-wise CV on shuffled data | 50.0% ± 2.2% |
 | pseudosession null | 80.4% ± 3.9% (p = 0.45) |
 | leave-one-block-out CV | 10.3% (i.e. *worse* than chance) |
+
+### Positive control (section 12)
+With the 20 target neurons made fully pupil-locked, **all three tests find 20/20**
+— but the parametric test also flags **71%** of the 80 untouched neurons, while the
+circular-shift and session-permutation tests flag **5%**. Power ramps up with
+effect size: the good controls reach ~50% detection when about 60% of a neuron's
+slow modulation is pupil-locked, i.e. they are conservative, not blind.
+
+For the block: leave-one-block-out climbs 9% → 21% → 78% → 97% as the real coding
+strength goes 0 → 0.5 → 1.0 → 1.5 spikes/s, and the pseudosession test leaves its
+own null band at 0.5 spikes/s — where leave-one-block-out is still reporting 21%,
+i.e. worse than chance. Pseudosessions are the more sensitive of the two.
+
+### Timescale sweep (section 13, 3 datasets per point)
+| fluctuation timescale | 1 s | 4 s | 8 s | 16 s | 50 s |
+|---|---|---|---|---|---|
+| neurons "correlated with pupil" | 22% | 53% | 62% | 71% | **81%** |
+| trial-wise CV | 65% | 82% | **88%** | 86% | 59% |
+| leave-one-block-out | 42% | 32% | 23% | 7% | 2% |
+
+The pupil false-positive rate climbs monotonically. The decoding artifact appears
+as soon as the fluctuation outlasts a few trials and is **largest at intermediate
+timescales**, so "our drift is very slow" is not a defence. Leave-one-block-out
+never claims coding at any timescale.
 
 ## The point of the shuffle control
 Permuting trials removes the slow autocorrelation that generated the effect, so
@@ -69,6 +103,11 @@ python build_notebook.py       # regenerate + re-execute
 The clickable figure needs a live kernel and uses `%matplotlib widget`. In the
 committed notebook it appears as a static PNG; re-run the cell to make it
 interactive. The cell right after it switches back to `%matplotlib inline`.
+
+Running the whole notebook top to bottom takes about **4 minutes**. Almost all of
+it is LDA refits: section 11a (100 pseudosessions), 12b (5 coding strengths x 40
+pseudosessions) and 13 (7 timescales x 3 datasets). Lower `N_PSEUDO`,
+`N_PSEUDO_SWEEP` and `N_REP` if you need it faster in front of a class.
 
 ## Note for later
 Section 5 uses a **simulated** pupil trace. Swapping in a real pupil trace from

@@ -289,6 +289,8 @@ plt.tight_layout(); plt.show()
 """)
 
 co("""\
+pupil_z = (pupil - pupil.mean()) / pupil.std()      # used in a few places below
+
 # Pearson correlation of every neuron's trial-by-trial firing rate with the pupil
 # trace, plus the p-value scipy reports for it (a two-sided t-test on r, n-2 df).
 res     = [stats.pearsonr(row, pupil) for row in fr]
@@ -296,10 +298,15 @@ r_pupil = np.array([x.statistic for x in res])
 p_pupil = np.array([x.pvalue for x in res])
 n_sig   = np.sum(p_pupil < 0.05)
 
-# With this many trials, |r| barely has to leave zero to be called significant.
-# Inverting the same t-test gives the threshold value of |r| explicitly:
-t_crit = stats.t.ppf(1 - 0.05 / 2, n_trials - 2)              # two-sided, n-2 df
-r_crit = t_crit / np.sqrt(t_crit ** 2 + n_trials - 2)
+
+def crit_r(n):
+    \"\"\"The value of |r| that reaches p < 0.05 with n paired samples -- the same
+    t-test as above, solved for r instead of for p.\"\"\"
+    t = stats.t.ppf(1 - 0.05 / 2, n - 2)
+    return t / np.sqrt(t ** 2 + n - 2)
+
+
+r_crit = crit_r(n_trials)
 print(f'n = {n_trials} trials  ->  any |r| > {r_crit:.3f} gives p < 0.05')
 
 # One bin grid for every correlation histogram in this notebook, with +/-r_crit
@@ -360,7 +367,6 @@ md("""\
 co("""\
 %matplotlib widget
 
-pupil_z = (pupil - pupil.mean()) / pupil.std()
 M_sorted = frz[order_pupil]
 
 fig, (ax_im, ax_tr) = plt.subplots(2, 1, figsize=(9.5, 6.5),
@@ -534,9 +540,85 @@ print(f'parametric p < 0.05        : {n_sig:3d} / {N_NEURONS} neurons')
 print(f'vs session-permutation null: {n_sig_other:3d} / {N_NEURONS} neurons')
 """)
 
-# ---------------------------------------------------------------- 8. decoding
+# ------------------------------------------------------- 8. effective n
 md("""\
-## 8. Test 2 — decoding the block variable
+## 8. How many independent samples do you actually have?
+""")
+
+co("""\
+def autocorr(x, max_lag):
+    \"\"\"Autocorrelation of x at lags 0..max_lag, normalised to 1 at lag 0.\"\"\"
+    x = x - x.mean()
+    full = np.correlate(x, x, 'full')[len(x) - 1:]     # lags 0, 1, 2, ...
+    return (full / full[0])[:max_lag + 1]
+
+
+def effective_n(x, y):
+    \"\"\"How many independent paired samples two autocorrelated series are worth.
+    Bartlett's result: the variance of r is inflated by the summed product of the
+    two autocorrelations, so
+
+        n_eff = n / (1 + 2 * sum_k (1 - k/n) * rho_x(k) * rho_y(k))
+
+    If either series has no autocorrelation the sum vanishes and n_eff = n.\"\"\"
+    n = len(x)
+    max_lag = n // 4
+    k = np.arange(1, max_lag + 1)
+    return n / (1 + 2 * np.sum((1 - k / n) * autocorr(x, max_lag)[1:]
+                               * autocorr(y, max_lag)[1:]))
+
+
+MAX_LAG = 100
+ac_neuron = np.mean([autocorr(row, MAX_LAG) for row in fr], axis=0)   # mean over neurons
+ac_pupil  = autocorr(pupil, MAX_LAG)
+
+n_eff      = np.median([effective_n(row, pupil) for row in fr])
+n_eff_null = 1 / r_circ.var()   # the circular-shift null measures the same quantity
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.1))
+axes[0].plot(ac_neuron, color='k', label='neurons (mean)')
+axes[0].plot(ac_pupil, color='tab:purple', label='pupil')
+axes[0].plot(ac_neuron * ac_pupil, color='tab:orange', label='product (what inflates r)')
+axes[0].axhline(0, color='0.7', lw=0.8)
+axes[0].set_xlabel('lag (trials)'); axes[0].set_ylabel('autocorrelation')
+axes[0].set_title('Both signals are autocorrelated for tens of trials')
+axes[0].legend(frameon=False, fontsize=8)
+
+axes[1].hist(r_circ.ravel(), bins=R_BINS, density=True, color='0.75',
+             label='circular-shift null')
+grid = np.linspace(-0.8, 0.8, 400)
+axes[1].plot(grid, stats.norm.pdf(grid, 0, 1 / np.sqrt(n_eff)), color='tab:orange',
+             lw=2, label=f'predicted: sd = 1/sqrt({n_eff:.0f})')
+for side in (-1, 1):
+    axes[1].axvline(side * r_crit, color='k', ls='--', lw=0.9,
+                    label='threshold from n = 511' if side == 1 else None)
+    axes[1].axvline(side * crit_r(n_eff), color='tab:red', ls='--', lw=1.2,
+                    label=f'threshold from n_eff = {n_eff:.0f}' if side == 1 else None)
+axes[1].set_xlabel("correlation with pupil (Pearson's r)"); axes[1].set_ylabel('density')
+axes[1].set_title('The null width follows from the effective n')
+axes[1].legend(frameon=False, fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.28),
+               ncol=2)
+plt.tight_layout(); plt.show()
+
+print(f'from the autocorrelations : n_eff = {n_eff:.0f}   (median over neurons)')
+print(f'from the circular-shift null: 1/var(r) = {n_eff_null:.0f}   '
+      f'(null sd {r_circ.std():.3f} vs predicted {1/np.sqrt(n_eff):.3f})')
+print()
+print(f'nominal   n = {n_trials:5d}  ->  threshold |r| = {r_crit:.3f}  ->  '
+      f'{np.sum(np.abs(r_pupil) > r_crit):3d} / {N_NEURONS} neurons "significant"')
+print(f'effective n = {n_eff:5.0f}  ->  threshold |r| = {crit_r(n_eff):.3f}  ->  '
+      f'{np.sum(np.abs(r_pupil) > crit_r(n_eff)):3d} / {N_NEURONS} neurons significant')
+""")
+
+md("""\
+That is the whole first half of this notebook in one number. Five hundred trials
+of two signals that each wander for ~25 s carry about as much independent
+information as twenty trials, and the correlation threshold moves accordingly.
+""")
+
+# ---------------------------------------------------------------- 9. decoding
+md("""\
+## 9. Test 2 — decoding the block variable
 """)
 
 co("""\
@@ -599,7 +681,7 @@ plt.tight_layout(); plt.show()
 
 # ---------------------------------------------------------------- 9. shuffle
 md("""\
-## 9. The same failing control: shuffle each neuron's timecourse
+## 10. The same failing control: shuffle each neuron's timecourse
 """)
 
 co("""\
@@ -624,11 +706,11 @@ print(f'shuffled : {acc_shuffled.mean()*100:.1f}% +/- {acc_shuffled.std()*100:.1
 
 # ---------------------------------------------------------------- 10. controls
 md("""\
-## 10. Two controls that work
+## 11. Two controls that work
 """)
 
 md("""\
-### 10a. Pseudosessions
+### 11a. Pseudosessions
 """)
 
 co("""\
@@ -656,16 +738,20 @@ print(f'real          : {acc_real5*100:.1f}%    p = {p_pseudo:.2f}')
 """)
 
 md("""\
-### 10b. Leave one block out
+### 11b. Leave one block out
 """)
 
 co("""\
-# Hold out every trial of one block at a time, so no trial from the held-out
-# block -- and none of its slow fluctuation state -- is in the training set.
+def blockout_cv(X, y, ids):
+    \"\"\"Leave-one-block-out CV: hold out every trial of one block at a time, so no
+    trial from the held-out block -- and none of its slow fluctuation state -- is
+    in the training set. Returns one accuracy per held-out block.\"\"\"
+    return np.array([LinearDiscriminantAnalysis().fit(X[ids != b], y[ids != b])
+                     .score(X[ids == b], y[ids == b]) for b in np.unique(ids)])
+
+
 blocks = np.unique(block_ids)
-acc_blockout = np.array([
-    LinearDiscriminantAnalysis().fit(X[block_ids != b], y[block_ids != b])
-    .score(X[block_ids == b], y[block_ids == b]) for b in blocks])
+acc_blockout = blockout_cv(X, y, block_ids)
 
 fig, ax = plt.subplots(figsize=(6.5, 3.4))
 ax.bar(blocks, acc_blockout * 100,
@@ -697,6 +783,201 @@ plot_fold(ax, X, y, train_b, test_b,
           f'Held-out block {b} (a {block_values[test_b[0]]:+d} block): '
           f'{acc_blockout[b]*100:.0f}% correct')
 plt.tight_layout(); plt.show()
+""")
+
+# -------------------------------------------------------- 12. positive control
+md("""\
+## 12. Do these controls still find real effects?
+""")
+
+co("""\
+def simulate(rng, tau=FLUCT_TAU, pupil_locked=0.0, n_pupil=0, block_gain=0.0):
+    \"\"\"The generative model from section 1, optionally with a real effect added:
+
+    - the first `n_pupil` neurons have a fraction `pupil_locked` of their slow
+      modulation replaced by the pupil trace (1.0 = entirely pupil-driven, 0.0 =
+      the original null data);
+    - if block_gain > 0, every neuron also gets a random weight times the block
+      value, so the population really does encode the block.
+
+    `tau` sets the timescale of the slow fluctuation. Returns the trial-binned
+    firing-rate matrix (neurons x trials, spikes/s).\"\"\"
+    slow = slow_traces(rng, N_NEURONS, n_trials, tau / TRIAL_DUR)
+    if n_pupil:      # swap part of the slow modulation for the pupil trace
+        f = pupil_locked
+        slow[:n_pupil] = np.sqrt(1 - f ** 2) * slow[:n_pupil] + f * pupil_z
+    rate_t = rng.uniform(*RATE_BASE, size=N_NEURONS)[:, None] + RATE_AMP * slow
+    if block_gain:
+        rate_t = rate_t + rng.uniform(-1, 1, N_NEURONS)[:, None] * block_gain * block_values
+    rate_t = np.clip(rate_t, 0, None)
+    rate_f = np.array([np.interp(t_pts, t_trial, r) for r in rate_t])
+    return (rng.poisson(rate_f * DT).reshape(N_NEURONS, n_trials, per_trial).sum(2)
+            / TRIAL_DUR)
+
+
+def pupil_tests(fr_x, rng, n_null=200):
+    \"\"\"Run all three per-neuron pupil tests on one dataset. Returns, for each
+    test, a boolean array saying which neurons it flags at p < 0.05.\"\"\"
+    r = corr_rows(fr_x, pupil)
+    shifts = rng.integers(1, n_trials, n_null)
+    null_circ = np.array([corr_rows(np.roll(fr_x, s, axis=1), pupil) for s in shifts])
+    others = 0.5 + 0.15 * slow_traces(rng, n_null, n_trials, PUPIL_TAU / TRIAL_DUR)
+    null_sess = np.array([corr_rows(fr_x, o) for o in others])
+    p_of = lambda null: (np.sum(np.abs(null) >= np.abs(r), axis=0) + 1) / (n_null + 1)
+    return {'parametric': np.abs(r) > crit_r(n_trials),
+            'circular shift': p_of(null_circ) < 0.05,
+            'session permutation': p_of(null_sess) < 0.05}
+""")
+
+md("""\
+### 12a. Twenty neurons that really do track the pupil
+""")
+
+co("""\
+N_REAL = 20                                   # neurons given a real pupil effect
+LOCKED = [0.0, 0.25, 0.5, 0.75, 1.0]          # fraction of their slow drive that is pupil
+
+hits, false_pos = {}, {}
+for frac in LOCKED:
+    flagged = pupil_tests(simulate(np.random.default_rng(101),
+                                   pupil_locked=frac, n_pupil=N_REAL),
+                          np.random.default_rng(102))
+    for name, flag in flagged.items():
+        hits.setdefault(name, []).append(flag[:N_REAL].mean())        # of the 20 real
+        false_pos.setdefault(name, []).append(flag[N_REAL:].mean())   # of the 80 null
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.6), sharey=True)
+for name in hits:
+    axes[0].plot(LOCKED, np.array(hits[name]) * 100, 'o-', label=name)
+    axes[1].plot(LOCKED, np.array(false_pos[name]) * 100, 'o-', label=name)
+axes[0].set_ylabel('neurons flagged (%)')
+axes[0].set_title(f'Detection rate: the {N_REAL} target neurons')
+axes[1].axhline(5, color='0.4', ls='--', lw=1, label='5% (what it should be)')
+axes[1].set_title(f'False positives: the {N_NEURONS - N_REAL} untouched neurons')
+for ax in axes:
+    ax.set_xlabel('fraction pupil-locked (0 = no real effect anywhere)')
+    ax.set_ylim(-3, 103); ax.legend(frameon=False, fontsize=8)
+plt.tight_layout(); plt.show()
+
+for name in hits:
+    print(f'{name:20s} fully pupil-locked: {hits[name][-1]*100:3.0f}% of the real neurons '
+          f'found, {false_pos[name][-1]*100:3.0f}% of the null neurons flagged')
+""")
+
+md("""\
+### 12b. A population that really does encode the block
+""")
+
+co("""\
+BLOCK_GAINS = [0.0, 0.25, 0.5, 1.0, 1.5]      # spikes/s per unit block value
+N_PSEUDO_SWEEP = 40
+
+tw, bo, real_acc, null_mean, null_sd, pp = [], [], [], [], [], []
+for gain in BLOCK_GAINS:
+    rb = np.random.default_rng(202)
+    Xb = simulate(rb, block_gain=gain).T
+    tw.append(trialwise_cv(Xb, y))
+    bo.append(blockout_cv(Xb, y, block_ids).mean())
+    null = np.array([trialwise_cv(Xb, make_blocks(rb, n_trials=n_trials)[0], folds=5)
+                     for _ in range(N_PSEUDO_SWEEP)])
+    real = trialwise_cv(Xb, y, folds=5)
+    real_acc.append(real); null_mean.append(null.mean()); null_sd.append(null.std())
+    pp.append((np.sum(null >= real) + 1) / (N_PSEUDO_SWEEP + 1))
+
+null_mean, null_sd = np.array(null_mean), np.array(null_sd)
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.6))
+axes[0].plot(BLOCK_GAINS, np.array(tw) * 100, 'o-', color='0.6',
+             label='trial-wise CV (high either way)')
+axes[0].plot(BLOCK_GAINS, np.array(bo) * 100, 'o-', color='tab:blue',
+             label='leave-one-block-out')
+axes[0].axhline(50, color='0.3', ls='--', lw=1, label='chance')
+axes[0].set_ylim(0, 105); axes[0].set_ylabel('accuracy (%)')
+axes[0].set_title('Leave-one-block-out recovers real coding')
+# the pseudosession test: does the real accuracy leave its own null band?
+axes[1].fill_between(BLOCK_GAINS, (null_mean - 2 * null_sd) * 100,
+                     (null_mean + 2 * null_sd) * 100, color='0.8',
+                     label='pseudosession null (mean +/- 2 sd)')
+axes[1].plot(BLOCK_GAINS, np.array(real_acc) * 100, 'o-', color='tab:blue',
+             label='real block sequence')
+axes[1].set_ylabel('trial-wise CV accuracy (%)')
+axes[1].set_title('So does the pseudosession test')
+for ax in axes:
+    ax.set_xlabel('strength of real block coding (spikes/s)')
+    ax.legend(frameon=False, fontsize=8, loc='upper left')
+plt.tight_layout(); plt.show()
+
+for g, a, b, p in zip(BLOCK_GAINS, tw, bo, pp):
+    print(f'block gain {g:4.2f}: trial-wise {a*100:5.1f}%   leave-block-out {b*100:5.1f}%   '
+          f'pseudosession p = {p:.3f}')
+""")
+
+md("""\
+The good controls are conservative, not blind. They need a real effect to be a
+substantial fraction of the slow variance before they call it — but when it is,
+they find it, and they keep flagging only ~5% of the neurons that have no effect.
+The pseudosession test picks up weak block coding that leave-one-block-out is
+still calling worse than chance.
+""")
+
+# ---------------------------------------------------------- 13. timescale sweep
+md("""\
+## 13. How bad is it, as a function of the fluctuation timescale?
+""")
+
+co("""\
+TAUS  = [1, 2, 4, 8, 16, 32, 50]     # s, timescale of the neural fluctuation
+N_REP = 3                            # datasets per timescale
+
+sweep = {'sig': [], 'trialwise': [], 'blockout': []}
+for tau in TAUS:
+    s_, t_, b_ = [], [], []
+    for rep in range(N_REP):
+        fx = simulate(np.random.default_rng(1000 + rep), tau=tau)
+        # at very short timescales a low-rate neuron can clip to silence for the
+        # whole session; it has no variance to correlate, so leave it out
+        alive = fx.std(axis=1) > 0
+        s_.append(np.mean(np.abs(corr_rows(fx[alive], pupil)) > r_crit))
+        t_.append(trialwise_cv(fx.T, y))
+        b_.append(blockout_cv(fx.T, y, block_ids).mean())
+    sweep['sig'].append(np.mean(s_))
+    sweep['trialwise'].append(np.mean(t_))
+    sweep['blockout'].append(np.mean(b_))
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.6))
+axes[0].plot(TAUS, np.array(sweep['sig']) * 100, 'o-', color='tab:purple')
+axes[0].axhline(5, color='0.4', ls='--', lw=1, label='5% (what it should be)')
+axes[0].set_ylim(0, 100); axes[0].set_ylabel('neurons with p < 0.05 (%)')
+axes[0].set_title('Test 1: correlation with pupil')
+axes[1].plot(TAUS, np.array(sweep['trialwise']) * 100, 'o-', color='0.4',
+             label='trial-wise CV')
+axes[1].plot(TAUS, np.array(sweep['blockout']) * 100, 'o-', color='tab:blue',
+             label='leave-one-block-out')
+axes[1].axhline(50, color='0.3', ls='--', lw=1, label='chance')
+axes[1].set_ylim(0, 100); axes[1].set_ylabel('accuracy (%)')
+axes[1].set_title('Test 2: decoding the block')
+for ax in axes:
+    ax.set_xscale('log'); ax.set_xticks(TAUS); ax.set_xticklabels(TAUS)
+    ax.set_xlabel('fluctuation timescale (s)')
+    ax.legend(frameon=False, fontsize=8)
+plt.tight_layout(); plt.show()
+
+print(f'trials are {TRIAL_DUR:.0f} s long; blocks average '
+      f'{n_trials/N_BLOCKS:.0f} trials\\n')
+for i, tau in enumerate(TAUS):
+    print(f'tau = {tau:2d} s : {sweep["sig"][i]*100:5.1f}% of neurons "correlated with '
+          f'pupil"   trial-wise CV {sweep["trialwise"][i]*100:5.1f}%   '
+          f'leave-block-out {sweep["blockout"][i]*100:5.1f}%')
+""")
+
+md("""\
+Neither curve is a step function at some safe timescale. The false-positive rate
+for the pupil correlation climbs steadily with the timescale, and the decoding
+artifact appears as soon as the fluctuation outlasts a few trials — long enough
+that a held-out trial's neighbours predict it. The artifact is largest at
+intermediate timescales rather than the longest ones, so "our drift is very slow"
+is not a defence. Leave-one-block-out never claims coding at any timescale: it
+degrades from chance to systematically wrong, which is itself the signature of
+drift.
 """)
 
 # ---------------------------------------------------------------------------
