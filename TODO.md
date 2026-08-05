@@ -47,6 +47,16 @@ pick conceptually distinct ones rather than variants of the same idea.
   crosses a detection/inclusion threshold. Fix: understand selection into the
   sample.
 
+## Improvements to existing material
+
+- **Real pupil trace in `nb4_walkthrough`.** Section 5 currently correlates
+  neurons against a *simulated* slow pupil trace. Pull a real pupil-diameter
+  trace from an Allen Institute dataset (Visual Coding or Visual Behavior
+  Neuropixels, via the AllenSDK) and use that instead: the nonsense correlations
+  come out the same, and it is harder to dismiss as a simulation artifact.
+  Simulated neurons should stay simulated — the point is that the neurons have no
+  relationship to the behavior.
+
 ## Considered and dropped
 
 - **Signal vs. noise correlations.** A signal correlation is a legitimate measure

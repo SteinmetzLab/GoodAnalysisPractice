@@ -25,6 +25,15 @@ or held-out data before it is believed.
 | [`nb6/`](nb6) | An event increases firing ~30% over baseline | Averaging per-neuron ratios is biased upward (Jensen) — baseline normalization invents an increase |
 | [`nb7/`](nb7) | 600 neurons encode the condition (p≈1e-13) | Correlated observations / pseudo-replication — the unit of analysis is the session, not the neuron |
 
+## Walkthroughs
+
+Not every topic works as a mystery. These are guided demos meant to be run
+**together with the class**, section by section.
+
+| Folder | Topic |
+|--------|-------|
+| [`nb4_walkthrough/`](nb4_walkthrough) | Nonsense correlations from slow fluctuations: 79/100 neurons "significantly" correlated with pupil and 81% block decoding, from neurons generated independently of both — plus which controls catch it (circular shift, session permutation, pseudosessions, block hold-out) and which only appear to (trial shuffling) |
+
 ## How each exercise is organized
 
 - `generate_data.py` — creates the synthetic dataset(s) in `data/`.
@@ -47,7 +56,8 @@ jupyter lab            # open notebookN_student.ipynb in each folder
 ```
 
 (To regenerate data or rebuild the notebooks from their `build_notebooks.py`,
-also `pip install nbformat nbclient`.)
+also `pip install nbformat nbclient`. `nb4_walkthrough` additionally needs
+`pip install rastermap ipympl`. Or just use `environment.yml`.)
 
 ## Contributing / notes
 

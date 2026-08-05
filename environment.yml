@@ -11,3 +11,8 @@ dependencies:
   # only needed to rebuild notebooks from build_notebooks.py:
   - nbformat
   - nbclient
+  # only needed for nb4_walkthrough (Rastermap sorting + the clickable figure):
+  - pip
+  - pip:
+      - rastermap
+      - ipympl
