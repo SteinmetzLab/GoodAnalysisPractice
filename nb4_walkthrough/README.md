@@ -21,9 +21,12 @@ are generated independently of both the pupil and the block.**
 2. Spike rasters
 3. Spike counts binned by trial
 4. The same matrix sorted by Rastermap — apparent structure, no cross-validation
-5. **Test 1** — correlate each neuron with pupil diameter; histograms of *r* and
-   *p*; matrix sorted by *r*; a clickable panel that overlays any neuron on the
-   pupil trace
+   — then two ways to cross-validate the sort: an **interleaved** odd/even split
+   (the structure replicates, because neighbouring trials share the same slow
+   fluctuation) versus a **contiguous** half split (it does not)
+5. **Test 1** — correlate each neuron with pupil diameter; histogram of *r* with
+   the significant bars in red; histogram of *p*; matrix sorted by *r*; a
+   clickable panel that overlays any neuron on the pupil trace
 6. A control that **fails**: shuffle each neuron's timecourse
 7. Controls that **work**: circular shift; another session's pupil trace
 8. **Test 2** — decode the block variable with ordinary k-fold CV; one fold shown
@@ -34,6 +37,9 @@ are generated independently of both the pupil and the block.**
 ## Realized numbers (seed 7, 511 trials)
 | | result |
 |---|---|
+| Rastermap sort, mean correlation of adjacent neurons — held-out **even** trials | **+0.345** (fit +0.374; all pairs +0.004) |
+| the same, held-out **second half** | **+0.088** (fit +0.379; all pairs +0.005) |
+| critical \|r\| for p<0.05 at n=511 | 0.087 |
 | neurons "significantly" correlated with pupil (p<0.05) | **79 / 100** |
 | after shuffling trials | 7 / 100 |
 | vs circular-shift null | 4 / 100 |

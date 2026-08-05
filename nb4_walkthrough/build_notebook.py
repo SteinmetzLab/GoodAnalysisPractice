@@ -1,4 +1,4 @@
-"""
+﻿"""
 Build the nb4 walkthrough notebook: "Nonsense correlations from slow fluctuations".
 
 Unlike nb1-nb7 this is not a mystery to solve -- it is a guided demo to run
@@ -36,6 +36,7 @@ co("""\
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 from scipy import stats
 from scipy.ndimage import gaussian_filter1d
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -194,11 +195,13 @@ md("""\
 """)
 
 co("""\
-# Rastermap finds an ordering of the neurons that puts neurons with similar
-# activity next to each other. It is fit on this same matrix -- there is no
-# held-out data anywhere.
-model = Rastermap(n_clusters=None, n_PCs=32, locality=0.5, time_lag_window=0).fit(frz)
-isort = model.isort            # neuron indices in the order Rastermap chose
+def rastermap_order(M):
+    \"\"\"The neuron ordering Rastermap finds for a neurons x trials matrix: it
+    puts neurons with similar activity next to each other.\"\"\"
+    return Rastermap(n_clusters=None, n_PCs=32, locality=0.5, time_lag_window=0).fit(M).isort
+
+
+isort = rastermap_order(frz)   # fit on the whole matrix: no held-out data anywhere
 
 fig, ax = plt.subplots(figsize=(9.5, 3.6))
 show_matrix(ax, frz[isort], 'RdBu_r', -3, 3,
@@ -206,6 +209,69 @@ show_matrix(ax, frz[isort], 'RdBu_r', -3, 3,
             'z-score', ylabel='neuron (Rastermap order)')
 ax.set_xlabel('trial')
 plt.tight_layout(); plt.show()
+""")
+
+md("""\
+### Cross-validating the sort: two ways to hold out half the trials
+""")
+
+co("""\
+def neighbour_corr(order, M):
+    \"\"\"Mean correlation between neurons that `order` placed next to each other,
+    measured on the matrix M. If the sort captured shared fluctuation that is
+    really there, this stays high on trials the sort never saw.\"\"\"
+    C = np.corrcoef(M)
+    return np.mean(C[order[:-1], order[1:]])
+
+
+def mean_pair_corr(M):
+    \"\"\"Mean correlation over all neuron pairs: what neighbour_corr would give
+    for an ordering that captured nothing.\"\"\"
+    C = np.corrcoef(M)
+    return np.mean(C[np.triu_indices(len(C), 1)])
+
+
+odd, even     = np.arange(1, n_trials, 2), np.arange(0, n_trials, 2)          # interleaved
+first, second = np.arange(n_trials // 2), np.arange(n_trials // 2, n_trials)  # contiguous
+
+order_odd   = rastermap_order(frz[:, odd])     # sort using only the odd trials
+order_first = rastermap_order(frz[:, first])   # sort using only the first half
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 6.5))
+show_matrix(axes[0, 0], frz[order_odd][:, odd], 'RdBu_r', -3, 3,
+            'Sorted on odd trials, showing odd trials', 'z-score',
+            ylabel='neuron (odd-trial order)')
+show_matrix(axes[0, 1], frz[order_odd][:, even], 'RdBu_r', -3, 3,
+            'Same order, showing held-out EVEN trials', 'z-score',
+            ylabel='neuron (odd-trial order)')
+show_matrix(axes[1, 0], frz[order_first][:, first], 'RdBu_r', -3, 3,
+            'Sorted on the 1st half, showing the 1st half', 'z-score',
+            ylabel='neuron (1st-half order)')
+show_matrix(axes[1, 1], frz[order_first][:, second], 'RdBu_r', -3, 3,
+            'Same order, showing the held-out 2nd half', 'z-score',
+            ylabel='neuron (1st-half order)')
+for ax, lab in zip(axes.ravel(), ['odd trial', 'even trial', 'trial', 'trial']):
+    ax.set_xlabel(lab)
+plt.tight_layout(); plt.show()
+
+print('mean correlation between neurons that ended up adjacent in the sort:')
+print(f'  interleaved split: fit (odd) {neighbour_corr(order_odd, frz[:, odd]):+.3f}   '
+      f'held out (even) {neighbour_corr(order_odd, frz[:, even]):+.3f}   '
+      f'[all pairs {mean_pair_corr(frz[:, even]):+.3f}]')
+print(f'  half split       : fit (1st) {neighbour_corr(order_first, frz[:, first]):+.3f}   '
+      f'held out (2nd)  {neighbour_corr(order_first, frz[:, second]):+.3f}   '
+      f'[all pairs {mean_pair_corr(frz[:, second]):+.3f}]')
+""")
+
+md("""\
+Interleaving the trials is not a test of the sort. Neighbouring trials share the
+same slow fluctuation, so the held-out half carries the same chance correlations
+the sort was fit to, and the structure replicates. Splitting the session into
+contiguous halves *is* a test, and the ordering does not transfer.
+
+(In `nb3` the trials really were independent, so there an odd/even split was a
+valid test. The same split fails here for exactly the reason ordinary k-fold
+cross-validation will fail in section 8.)
 """)
 
 # ---------------------------------------------------------------- 5. pupil
@@ -223,40 +289,43 @@ plt.tight_layout(); plt.show()
 """)
 
 co("""\
-def corr_rows(M, v):
-    \"\"\"Pearson correlation between every row of M and the vector v. Written as
-    a dot product of z-scored variables (which is all a Pearson correlation is)
-    so that we can run it thousands of times for the null distributions below.\"\"\"
-    Mz = (M - M.mean(axis=1, keepdims=True)) / M.std(axis=1, keepdims=True)
-    vz = (v - v.mean()) / v.std()
-    return (Mz @ vz) / v.size
+# Pearson correlation of every neuron's trial-by-trial firing rate with the pupil
+# trace, plus the p-value scipy reports for it (a two-sided t-test on r, n-2 df).
+res     = [stats.pearsonr(row, pupil) for row in fr]
+r_pupil = np.array([x.statistic for x in res])
+p_pupil = np.array([x.pvalue for x in res])
+n_sig   = np.sum(p_pupil < 0.05)
 
+# With this many trials, |r| barely has to leave zero to be called significant.
+# Inverting the same t-test gives the threshold value of |r| explicitly:
+t_crit = stats.t.ppf(1 - 0.05 / 2, n_trials - 2)              # two-sided, n-2 df
+r_crit = t_crit / np.sqrt(t_crit ** 2 + n_trials - 2)
+print(f'n = {n_trials} trials  ->  any |r| > {r_crit:.3f} gives p < 0.05')
 
-def pval_from_r(r, n):
-    \"\"\"The standard parametric p-value for a Pearson r computed from n paired
-    samples: a two-sided t-test on t = r*sqrt((n-2)/(1-r^2)) with n-2 degrees of
-    freedom. This is exactly what scipy.stats.pearsonr returns.\"\"\"
-    t = r * np.sqrt((n - 2) / np.clip(1 - r ** 2, 1e-12, None))
-    return 2 * stats.t.sf(np.abs(t), n - 2)
-
-
-r_pupil = corr_rows(fr, pupil)
-p_pupil = pval_from_r(r_pupil, n_trials)
-
-# sanity check that these two helpers agree with scipy on one neuron
-chk = stats.pearsonr(fr[0], pupil)
-print(f'neuron 0   ours: r = {r_pupil[0]:+.4f}, p = {p_pupil[0]:.3g}')
-print(f'neuron 0  scipy: r = {chk.statistic:+.4f}, p = {chk.pvalue:.3g}')
+# One bin grid for every correlation histogram in this notebook, with +/-r_crit
+# exactly on bin edges so that no bar mixes significant with non-significant.
+_edges = np.arange(0, 0.8 + r_crit, r_crit)
+R_BINS = np.concatenate([-_edges[1:][::-1], _edges])
 """)
 
 co("""\
-n_sig = np.sum(p_pupil < 0.05)
+def hist_by_significance(ax, r, title):
+    \"\"\"Histogram of correlations with the significant bars in red: away from zero
+    in either direction is significant, near zero is not.\"\"\"
+    _, _, patches = ax.hist(r, bins=R_BINS)
+    for patch, lo, hi in zip(patches, R_BINS[:-1], R_BINS[1:]):
+        patch.set_facecolor('tab:red' if abs(lo + hi) / 2 > r_crit else '0.6')
+    for side in (-1, 1):
+        ax.axvline(side * r_crit, color='k', ls='--', lw=0.8)
+    ax.set_xlabel("correlation with pupil (Pearson's r)"); ax.set_ylabel('neurons')
+    ax.set_title(title)
+    ax.legend(handles=[Patch(facecolor='tab:red', label='p < 0.05'),
+                       Patch(facecolor='0.6', label='n.s.')],
+              frameon=False, fontsize=8, loc='upper left')
+
 
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.2))
-axes[0].hist(r_pupil, bins=np.linspace(-0.8, 0.8, 33), color='0.5')
-axes[0].axvline(0, color='k', lw=0.8)
-axes[0].set_xlabel("correlation with pupil (Pearson's r)"); axes[0].set_ylabel('neurons')
-axes[0].set_title('Correlation with pupil diameter')
+hist_by_significance(axes[0], r_pupil, 'Correlation with pupil diameter')
 axes[1].hist(p_pupil, bins=np.linspace(0, 1, 21), color='0.5')
 axes[1].axvline(0.05, color='tab:red', lw=1.2, ls='--', label='p = 0.05')
 axes[1].set_xlabel('p-value'); axes[1].set_ylabel('neurons')
@@ -345,8 +414,9 @@ fr_shuffled = np.array([rng.permutation(row) for row in fr])
 frz_shuffled = ((fr_shuffled - fr_shuffled.mean(axis=1, keepdims=True))
                 / fr_shuffled.std(axis=1, keepdims=True))
 
-r_shuffled = corr_rows(fr_shuffled, pupil)         # vs the real pupil trace
-p_shuffled = pval_from_r(r_shuffled, n_trials)
+res_sh     = [stats.pearsonr(row, pupil) for row in fr_shuffled]   # vs the real pupil
+r_shuffled = np.array([x.statistic for x in res_sh])
+p_shuffled = np.array([x.pvalue for x in res_sh])
 n_sig_shuffled = np.sum(p_shuffled < 0.05)
 
 fig, ax = plt.subplots(figsize=(9.5, 3.4))
@@ -355,19 +425,14 @@ show_matrix(ax, frz_shuffled, 'RdBu_r', -3, 3,
 ax.set_xlabel('trial')
 plt.tight_layout(); plt.show()
 
-fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.2))
-axes[0].hist(r_pupil, bins=np.linspace(-0.8, 0.8, 33), color='tab:blue',
-             alpha=0.65, label='real')
-axes[0].hist(r_shuffled, bins=np.linspace(-0.8, 0.8, 33), color='0.4',
-             alpha=0.8, label='shuffled')
-axes[0].set_xlabel("correlation with pupil (Pearson's r)"); axes[0].set_ylabel('neurons')
-axes[0].set_title('Real vs shuffled correlations')
-axes[0].legend(frameon=False, fontsize=8)
-axes[1].hist(p_shuffled, bins=np.linspace(0, 1, 21), color='0.4')
-axes[1].axvline(0.05, color='tab:red', lw=1.2, ls='--', label='p = 0.05')
-axes[1].set_xlabel('p-value'); axes[1].set_ylabel('neurons')
-axes[1].set_title('p-values after shuffling')
-axes[1].legend(frameon=False, fontsize=8)
+fig, axes = plt.subplots(1, 3, figsize=(12.5, 3.2))
+hist_by_significance(axes[0], r_pupil, 'Real data')
+hist_by_significance(axes[1], r_shuffled, 'After shuffling trials')
+axes[2].hist(p_shuffled, bins=np.linspace(0, 1, 21), color='0.5')
+axes[2].axvline(0.05, color='tab:red', lw=1.2, ls='--', label='p = 0.05')
+axes[2].set_xlabel('p-value'); axes[2].set_ylabel('neurons')
+axes[2].set_title('p-values after shuffling')
+axes[2].legend(frameon=False, fontsize=8)
 plt.tight_layout(); plt.show()
 
 print(f'real     : {n_sig:3d} / {N_NEURONS} neurons significant (p < 0.05)')
@@ -390,6 +455,22 @@ md("""\
 """)
 
 co("""\
+def corr_rows(M, v):
+    \"\"\"Pearson correlation between every row of M and the vector v: the same
+    number scipy.stats.pearsonr returns, written out as a dot product of z-scored
+    variables (which is all a Pearson correlation is). Each null below needs
+    20,000 correlations; looping over scipy.stats.pearsonr takes ~15 s for that,
+    this takes ~0.1 s.\"\"\"
+    Mz = (M - M.mean(axis=1, keepdims=True)) / M.std(axis=1, keepdims=True)
+    vz = (v - v.mean()) / v.std()
+    return (Mz @ vz) / v.size
+
+
+print('corr_rows matches scipy.stats.pearsonr:',
+      np.allclose(corr_rows(fr, pupil), r_pupil))
+""")
+
+co("""\
 N_SHIFT = 200
 shift_amounts = rng.integers(1, n_trials, N_SHIFT)
 
@@ -402,9 +483,9 @@ p_circ = (np.sum(np.abs(r_circ) >= np.abs(r_pupil), axis=0) + 1) / (N_SHIFT + 1)
 n_sig_circ = np.sum(p_circ < 0.05)
 
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.2))
-axes[0].hist(r_circ.ravel(), bins=np.linspace(-0.8, 0.8, 33), density=True,
+axes[0].hist(r_circ.ravel(), bins=R_BINS, density=True,
              color='0.6', label='circular shifts (null)')
-axes[0].hist(r_pupil, bins=np.linspace(-0.8, 0.8, 33), density=True,
+axes[0].hist(r_pupil, bins=R_BINS, density=True,
              color='tab:blue', alpha=0.6, label='real')
 axes[0].set_xlabel("correlation with pupil (Pearson's r)"); axes[0].set_ylabel('density')
 axes[0].set_title('Circular-shift null covers the real correlations')
@@ -435,9 +516,9 @@ p_other = (np.sum(np.abs(r_other) >= np.abs(r_pupil), axis=0) + 1) / (N_SESSIONS
 n_sig_other = np.sum(p_other < 0.05)
 
 fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.2))
-axes[0].hist(r_other.ravel(), bins=np.linspace(-0.8, 0.8, 33), density=True,
+axes[0].hist(r_other.ravel(), bins=R_BINS, density=True,
              color='0.6', label="other sessions' pupil (null)")
-axes[0].hist(r_pupil, bins=np.linspace(-0.8, 0.8, 33), density=True,
+axes[0].hist(r_pupil, bins=R_BINS, density=True,
              color='tab:blue', alpha=0.6, label='this session')
 axes[0].set_xlabel("correlation with pupil (Pearson's r)"); axes[0].set_ylabel('density')
 axes[0].set_title('Session-permutation null covers the real correlations')
