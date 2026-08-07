@@ -13,3 +13,9 @@ nb2/data/spikes.npz
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Local Netlify folder
+.netlify
+
+# Netlify CLI state
+.netlify/

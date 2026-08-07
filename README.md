@@ -34,6 +34,14 @@ Not every topic works as a mystery. These are guided demos meant to be run
 |--------|-------|
 | [`nb4_walkthrough/`](nb4_walkthrough) | Nonsense correlations from slow fluctuations: 79/100 neurons "significantly" correlated with pupil and 81% block decoding, from neurons generated independently of both — which controls catch it (circular shift, session permutation, pseudosessions, block hold-out) and which only appear to (trial shuffling); the effective sample size that explains it; a positive control showing the good tests still have power; and a sweep over the fluctuation timescale |
 
+## Interactive demos
+
+Things you run and click rather than read.
+
+| Folder | What it does |
+|--------|--------------|
+| [`plotting_drilldown_demo/`](plotting_drilldown_demo) | Starts from the figure everyone publishes — three average PSTHs, mean ± SEM across neurons — and lets you click down through the neurons × time matrix, one neuron's trials, and one trial, to the raw voltage on the probe with a dot on every spike. Makes the distance between the published trace and the recorded data clickable. Comes in three forms: a standalone script, a Jupyter notebook, and **[a live web page](https://drilldown-psth-to-voltage.netlify.app)** that needs no install. |
+
 ## How each exercise is organized
 
 - `generate_data.py` — creates the synthetic dataset(s) in `data/`.
