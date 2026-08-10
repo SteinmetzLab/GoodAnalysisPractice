@@ -27,6 +27,46 @@ scale. The grey band on the raster marks exactly what the voltage panel is
 showing. Click the raster to move that window, and press `d` to hide the dots
 if you want to see the waveforms unobscured.
 
+## Normalization and statistic selectors (standalone script only)
+
+The level-0 window carries three selectors. Changing any of them rebuilds
+levels 0–2 **in place**, so you can watch the published figure change shape
+without losing your place.
+
+![The selectors, showing per-trial ratio normalization with medians](controls.png)
+
+- **normalize each TRIAL** (before averaging trials) — each trial is centred or
+  divided by *its own* pre-stimulus baseline, estimated from a couple of spikes
+  and therefore very noisy.
+- **normalize each NEURON** (before averaging neurons) — each neuron is centred
+  or divided by a baseline pooled over all of its trials, which is far better
+  estimated. Baselines are pooled across all three stimuli so the traces stay
+  comparable.
+- **average with** — mean or median. With a median the shading switches from
+  SEM to a bootstrap standard error (200 resamples, fixed seed).
+
+The interesting comparison is *divide by baseline* at the trial level versus at
+the neuron level. Per-neuron gives a sane ~3.9× peak for A over a baseline of
+1.0. Per-trial pushes the peak to 6.2 **and leaves the whole post-stimulus
+period sitting near 1.8 with a baseline below 1** — the upward bias you get
+from averaging ratios with noisy denominators, which is exactly what
+[`nb6`](../nb6) is about.
+
+Two things worth knowing:
+
+- **Divide-by-almost-zero is floored**, at 1 spike/s for rates and 0.5 for SDs.
+  When the floor bites, a red note above the selectors says how many trials or
+  neurons it hit — 959 of 6000 per-trial baselines, for this dataset. Some
+  combinations are then near no-ops (dividing by a baseline you already
+  subtracted); the note is how you can tell.
+- **Medians look degenerate, and that is real.** With 10 ms bins the median
+  rate across 40 trials is often exactly zero, so the B and C traces flatten
+  onto the axis. That is a true statement about sparse spike trains, not a bug.
+
+The notebook and web versions currently use the defaults (no normalization,
+mean). `Session.configure()` in `drilldown_core.py` is where this lives, so
+wiring selectors into them later is not much work.
+
 ## Three versions, one core
 
 | File | What it is |
@@ -87,6 +127,21 @@ did. Level 1 shows the average is carried by a minority of strongly responsive
 neurons; level 2 shows how few spikes per trial that actually is; level 3 shows
 what a "spike" was in the first place. The point is to make the distance between
 the published trace and the recorded voltage clickable rather than rhetorical.
+
+## Running this on real data
+
+[`REAL_DATA_PLAN.md`](REAL_DATA_PLAN.md) scopes what it would take to point
+this at Allen Institute Visual Coding – Neuropixels or IBL public data.
+
+Short version: levels 0–2 are just a preprocessing script and a fetch layer.
+Level 3 turns out to be more achievable than expected — Allen's raw spike-band
+files are flat channel-interleaved int16 on S3, so a 150 ms × 384-channel
+window is **3.46 MB of contiguous bytes** that a browser can pull with a plain
+HTTP Range request and no decompression. IBL also publishes raw AP band, but as
+1-second mtscomp chunks, which would need a decoder in JavaScript.
+
+The open question is CORS and requester-pays on the buckets, not data volume —
+the plan lists the checks to run first and the fallback if they fail.
 
 ## Requirements
 

@@ -29,6 +29,42 @@ VOLT_CLIM   = 55.0       # uV, colour limits of the voltage image
 HIT_TOL = 0.20           # fraction of axes height within which a trace counts
                          # as clicked
 
+# ----------------------------------------------------------------------
+# Normalisation and aggregation options
+#
+# There are two places you can normalise, and they are not equivalent:
+#   * per trial, BEFORE averaging trials  -- each trial is divided/centred by
+#     its OWN pre-stimulus baseline, which is estimated from very few spikes
+#     and is therefore extremely noisy
+#   * per neuron, BEFORE averaging neurons -- each neuron is divided/centred
+#     by a baseline pooled over all of its trials, which is far better
+#     estimated
+# The point of the selectors is to let you watch the population figure change
+# shape depending on which you pick.
+# ----------------------------------------------------------------------
+TRIAL_NORMS  = ('none', 'subtract baseline', 'divide by baseline',
+                'baseline z-score')
+NEURON_NORMS = ('none', 'subtract baseline', 'divide by baseline',
+                'peak = 1', 'baseline z-score')
+STATS        = ('mean', 'median')
+
+RATE_FLOOR = 1.0     # floor on any baseline used as a divisor (spikes/s)
+SD_FLOOR   = 0.5     # floor on any baseline SD used as a divisor (spikes/s)
+N_BOOT     = 200     # bootstrap resamples for the standard error of a median
+BOOT_SEED  = 11      # fixed, so the error bands are reproducible
+
+
+def _value_label(trial_norm, neuron_norm):
+    """Axis label for whatever the numbers mean after normalisation."""
+    last = neuron_norm if neuron_norm != 'none' else trial_norm
+    return {
+        'none':               'firing rate (spikes/s)',
+        'subtract baseline':  '$\\Delta$ firing rate (spikes/s)',
+        'divide by baseline': 'rate / baseline',
+        'peak = 1':           'normalized rate (peak = 1)',
+        'baseline z-score':   'baseline z-score (SD)',
+    }[last]
+
 
 def apply_style():
     plt.rcParams['font.family']       = 'Arial'
@@ -106,6 +142,7 @@ class Session:
         self.colors = neuron_colors(self.n_neurons)
 
         self._bin_spikes()
+        self.configure()
         self._volt_cache = {}
 
     # -- spike extraction ------------------------------------------------
@@ -130,16 +167,101 @@ class Session:
 
         # rates[neuron, trial, bin], spikes/s, smoothed for display
         self.rates = gauss_smooth(counts / BIN, SMOOTH_SD / BIN)
+        self.base = self.t < 0            # pre-stimulus bins
 
-        # psth[neuron, stim, bin]: mean over trials of that stimulus
-        self.psth = np.stack([self.rates[:, tr, :].mean(axis=1)
-                              for tr in self.trials_of], axis=1)
+    # -- normalisation and aggregation -----------------------------------
+    def configure(self, trial_norm='none', neuron_norm='none', stat='mean'):
+        """
+        Rebuild self.psth under a choice of normalisation and statistic.
 
-    def population_mean(self, s):
-        """Mean and SEM across neurons of the stim-s PSTH."""
-        m = self.psth[:, s, :].mean(axis=0)
-        sem = self.psth[:, s, :].std(axis=0, ddof=1) / np.sqrt(self.n_neurons)
-        return m, sem
+        Both normalisations are applied; 'none'/'none'/'mean' reproduces the
+        plain average. The neuron-level step is deliberately kept affine
+        (offset and scale per neuron) so that level 2 can apply the identical
+        transform to individual trials and stay consistent with level 1.
+        """
+        if trial_norm not in TRIAL_NORMS:
+            raise ValueError(f'trial_norm must be one of {TRIAL_NORMS}')
+        if neuron_norm not in NEURON_NORMS:
+            raise ValueError(f'neuron_norm must be one of {NEURON_NORMS}')
+        if stat not in STATS:
+            raise ValueError(f'stat must be one of {STATS}')
+        self.trial_norm, self.neuron_norm, self.stat = (
+            trial_norm, neuron_norm, stat)
+
+        R, base = self.rates, self.base
+        b_mean = R[:, :, base].mean(axis=2)                 # [neuron, trial]
+        self.n_floored = 0
+
+        if trial_norm == 'none':
+            Rn = R
+        elif trial_norm == 'subtract baseline':
+            Rn = R - b_mean[:, :, None]
+        elif trial_norm == 'divide by baseline':
+            self.n_floored = int((b_mean < RATE_FLOOR).sum())
+            Rn = R / np.maximum(b_mean, RATE_FLOOR)[:, :, None]
+        else:                                               # baseline z-score
+            b_sd = R[:, :, base].std(axis=2, ddof=1)
+            self.n_floored = int((b_sd < SD_FLOOR).sum())
+            Rn = (R - b_mean[:, :, None]) / np.maximum(b_sd, SD_FLOOR)[:, :, None]
+        self.rates_n = Rn
+
+        psth = np.stack([self._central(Rn[:, tr, :], 1) for tr in self.trials_of],
+                        axis=1)                             # [neuron, stim, bin]
+
+        nb = psth[:, :, base].reshape(self.n_neurons, -1)   # pooled over stimuli
+        off = np.zeros(self.n_neurons)
+        sc = np.ones(self.n_neurons)
+        self.n_floored_neurons = 0
+        if neuron_norm == 'subtract baseline':
+            off = nb.mean(axis=1)
+        elif neuron_norm == 'divide by baseline':
+            raw = nb.mean(axis=1)
+            self.n_floored_neurons = int((raw < RATE_FLOOR).sum())
+            sc = np.maximum(raw, RATE_FLOOR)
+        elif neuron_norm == 'peak = 1':
+            sc = np.maximum(np.abs(psth).reshape(self.n_neurons, -1).max(axis=1),
+                            1e-6)
+        elif neuron_norm == 'baseline z-score':
+            off = nb.mean(axis=1)
+            raw = nb.std(axis=1, ddof=1)
+            self.n_floored_neurons = int((raw < SD_FLOOR).sum())
+            sc = np.maximum(raw, SD_FLOOR)
+        self._nn_off, self._nn_sc = off, sc
+
+        self.psth = (psth - off[:, None, None]) / sc[:, None, None]
+
+        self.value_label = _value_label(trial_norm, neuron_norm)
+        self.stat_label = 'Average' if stat == 'mean' else 'Median'
+        self.spread_label = 'SEM' if stat == 'mean' else 'bootstrap SE'
+        return self
+
+    def _central(self, x, axis):
+        return (np.median(x, axis=axis) if self.stat == 'median'
+                else np.mean(x, axis=axis))
+
+    def _spread(self, x, axis):
+        """Standard error of the chosen statistic; bootstrapped for a median."""
+        n = x.shape[axis]
+        if self.stat == 'mean':
+            return x.std(axis=axis, ddof=1) / np.sqrt(n)
+        rng = np.random.default_rng(BOOT_SEED)
+        xm = np.moveaxis(x, axis, 0)
+        idx = rng.integers(0, n, size=(N_BOOT, n))
+        return np.median(xm[idx], axis=1).std(axis=0, ddof=1)
+
+    def population_stat(self, s):
+        """Central tendency and its standard error across neurons, stim s."""
+        x = self.psth[:, s, :]
+        return self._central(x, 0), self._spread(x, 0)
+
+    def neuron_trial_traces(self, i, s):
+        """One neuron's single-trial traces for stim s, normalised as level 1."""
+        return (self.rates_n[i][self.trials_of[s]] - self._nn_off[i]) / self._nn_sc[i]
+
+    def neuron_stat(self, i, s):
+        """Central tendency and its standard error across trials, neuron i."""
+        x = self.neuron_trial_traces(i, s)
+        return self._central(x, 0), self._spread(x, 0)
 
     # -- raw voltage -----------------------------------------------------
     def trial_voltage(self, trial):
@@ -162,26 +284,30 @@ class Session:
 def draw_summary(ax, S, title=None):
     ax.clear()
     ax.set_axis_on()
+    lo = np.inf
     for s in range(S.n_stim):
-        m, sem = S.population_mean(s)
-        ax.fill_between(S.t, m - sem, m + sem, color=STIM_COLORS[s],
+        m, se = S.population_stat(s)
+        lo = min(lo, (m - se).min())
+        ax.fill_between(S.t, m - se, m + se, color=STIM_COLORS[s],
                         alpha=0.5, linewidth=0)
         ax.plot(S.t, m, color=STIM_COLORS[s], lw=2,
                 label=f'stim {S.stim_names[s]}')
     ax.axvline(0, color='0.6', lw=0.8, zorder=0)
+    if lo < 0:
+        ax.axhline(0, color='0.8', lw=0.8, zorder=0)
     ax.set_xlabel('time from stimulus onset (s)')
-    ax.set_ylabel('firing rate (spikes/s)')
+    ax.set_ylabel(S.value_label)
     ax.set_xlim(S.t[0], S.t[-1])
     ax.set_title(title if title is not None else
-                 f'Average across {S.n_neurons} neurons '
-                 f'(shading: $\\pm$SEM across neurons)')
+                 f'{S.stat_label} across {S.n_neurons} neurons '
+                 f'(shading: $\\pm${S.spread_label} across neurons)')
     ax.legend(frameon=False, loc='upper right', fontsize=9)
 
 
 def hit_summary(ax, S, xdata, ydata):
     """Which trace was clicked, or None if the click was nowhere near one."""
     span = np.diff(ax.get_ylim())[0]
-    dist = [abs(np.interp(xdata, S.t, S.population_mean(s)[0]) - ydata)
+    dist = [abs(np.interp(xdata, S.t, S.population_stat(s)[0]) - ydata)
             for s in range(S.n_stim)]
     s = int(np.argmin(dist))
     return s if dist[s] <= HIT_TOL * span else None
@@ -194,10 +320,16 @@ def draw_neuron_matrix(ax, S, s, cax=None):
     ax.clear()
     ax.set_axis_on()
     M = S.psth[:, s, :]
-    im = ax.imshow(M, aspect='auto', origin='upper', cmap='magma',
+    # Normalisation can send values below zero; a sequential map would then
+    # hide the sign, so switch to a symmetric diverging one.
+    if M.min() < -1e-9:
+        lim = np.percentile(np.abs(M), 99.5)
+        kw = dict(cmap='RdBu_r', vmin=-lim, vmax=lim)
+    else:
+        kw = dict(cmap='magma', vmin=0, vmax=np.percentile(M, 99.5))
+    im = ax.imshow(M, aspect='auto', origin='upper',
                    extent=[S.t[0], S.t[-1], S.n_neurons - 0.5, -0.5],
-                   interpolation='nearest',
-                   vmin=0, vmax=np.percentile(M, 99.5))
+                   interpolation='nearest', **kw)
     ax.axvline(0, color='w', lw=0.8, alpha=0.6)
     ax.set_xlabel('time from stimulus onset (s)')
     ax.set_ylabel('neuron #')
@@ -208,7 +340,7 @@ def draw_neuron_matrix(ax, S, s, cax=None):
         cax.clear()
         cax.set_axis_on()
         cb = ax.figure.colorbar(im, cax=cax)
-        cb.set_label('firing rate (spikes/s)')
+        cb.set_label(S.value_label)
     return im
 
 
@@ -251,20 +383,22 @@ def draw_neuron(ax_raster, ax_psth, S, neuron):
     ax_raster.set_ylabel('trial (grouped by stimulus)')
     ax_raster.set_title(f'Neuron {neuron}: all {S.n_trials} trials')
 
+    lo = np.inf
     for s in range(S.n_stim):
-        r = S.rates[neuron][S.trials_of[s]]
-        m = r.mean(axis=0)
-        sem = r.std(axis=0, ddof=1) / np.sqrt(r.shape[0])
-        ax_psth.fill_between(S.t, m - sem, m + sem, color=STIM_COLORS[s],
+        m, se = S.neuron_stat(neuron, s)
+        lo = min(lo, (m - se).min())
+        ax_psth.fill_between(S.t, m - se, m + se, color=STIM_COLORS[s],
                              alpha=0.5, linewidth=0)
         ax_psth.plot(S.t, m, color=STIM_COLORS[s], lw=2,
                      label=f'stim {S.stim_names[s]}')
     ax_psth.axvline(0, color='0.6', lw=0.8, zorder=0)
+    if lo < 0:
+        ax_psth.axhline(0, color='0.8', lw=0.8, zorder=0)
     ax_psth.set_xlim(-S.pre, S.post)
     ax_psth.set_xlabel('time from stimulus onset (s)')
-    ax_psth.set_ylabel('firing rate (spikes/s)')
-    ax_psth.set_title(f'Neuron {neuron} average PSTHs\n'
-                      f'(shading: $\\pm$SEM across trials)')
+    ax_psth.set_ylabel(S.value_label)
+    ax_psth.set_title(f'Neuron {neuron} {S.stat} PSTHs\n'
+                      f'(shading: $\\pm${S.spread_label} across trials)')
     ax_psth.legend(frameon=False, loc='upper right', fontsize=9)
     return row_trial
 
