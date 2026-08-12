@@ -168,6 +168,44 @@ These are not implementation details; they change what the demo *teaches*.
 
 ---
 
+## 5b. What CORS is, and the "just host it ourselves" option
+
+**CORS in one paragraph.** When a page served from one domain (say
+`drilldown-psth-to-voltage.netlify.app`) asks the browser to fetch data from a
+*different* domain (say `s3.amazonaws.com`), the browser blocks the read unless
+the second server explicitly opts in with a response header
+(`Access-Control-Allow-Origin`). It is a rule enforced **by browsers only** —
+Python, `curl`, `wget` and `boto3` ignore it entirely. So CORS can never affect
+the standalone script or the notebook. It only decides whether the *web page*
+may read Allen's bucket directly. Data can be fully public and still be
+unreadable from a web page, purely because nobody set that header.
+
+**So yes: hosting a copy ourselves is a clean way around it, and it is probably
+what we should do anyway.** If the bytes come from a domain we control, we set
+the header and the question disappears.
+
+**And we would not need to download a whole probe.** This is the part worth
+knowing: because `spike_band.dat` is flat int16, the *same* byte-range trick
+that would let a browser grab one window also works from Python with `boto3`.
+So the offline extraction step can pull only the snippets it wants:
+
+| What | Size |
+|---|---|
+| One whole probe's raw file | 30 kHz × 384 ch × 2 B ≈ **23 MB/s** → a few hundred GB for a multi-hour session |
+| 100 trials × 150 ms × 384 ch, range-requested | **~350 MB** |
+| Same, cropped to 64 channels and scaled to int8 | **~29 MB** |
+| Levels 0–2 for the whole session (PSTHs + both spike orderings) | **~20 MB** |
+
+So a complete, self-hosted, real-data version of all four levels is **well
+under 1 GB** — no bulk download, no storage conversation. Downloading a full
+probe (a few hundred GB) only buys the ability to cut a snippet for *any*
+trial after the fact, which is not worth it for a course.
+
+Where to host: an S3 bucket or Cloudflare R2 we own (R2 has no egress fees, and
+both let us set CORS), or Netlify itself for the small assets. Netlify's free
+tier includes 100 GB/month of bandwidth, which a ~300 MB payload comfortably
+fits unless the page gets popular.
+
 ## 6. Verify these first — they decide the architecture
 
 A half-day spike, before writing anything:
@@ -195,7 +233,17 @@ If 1 and 2 come back unfavourable, go straight to (c). Nothing else changes.
 
 ## 7. Effort
 
-Rough, assuming one person who already knows this codebase:
+**What the numbers below mean.** They are conventional person-day estimates
+for one developer who already knows this codebase — the usual unit for a
+planning doc, and useful if this ever gets handed to a student. They are *not*
+an estimate of how long it takes if Claude writes it: the code-writing
+collapses (the three-version demo in this folder was built in a single
+session). What does **not** collapse is everything else — waiting on downloads
+and compute, the verification loop in §6, and the back-and-forth where a human
+looks at a figure and says "that's wrong." Realistically, with Claude doing
+the implementation, expect **a session or two per phase**, with phases 0 and 1
+likely finishing in one sitting, and the schedule set by data transfer and
+review rather than by typing.
 
 | Phase | Work | Estimate |
 |---|---|---|
@@ -208,9 +256,10 @@ Rough, assuming one person who already knows this codebase:
 | 3e | Level 3 via IBL mtscomp-in-JS | 1–2 weeks, least certain |
 | 4 | Teaching polish: curation selector, honesty copy, session picker | 1–2 days |
 
-**A good target: ~1 week** for a real-Allen-data version with pre-extracted
-voltage snippets (phases 0, 1, 2, 3c) — which for a course is likely better
-than live streaming anyway.
+**A good target: ~1 week** of person-time for a real-Allen-data version with
+pre-extracted voltage snippets (phases 0, 1, 2, 3c) — which for a course is
+likely better than live streaming anyway, and which sidesteps CORS entirely by
+hosting the snippets ourselves (§5b).
 **~2 weeks** if live range requests work and you want any-trial access.
 
 The Python standalone and notebook versions are much cheaper throughout: they
