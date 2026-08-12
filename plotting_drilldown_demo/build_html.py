@@ -49,8 +49,8 @@ def build_payload():
 
     colors = ['#%02x%02x%02x' % tuple(int(round(255 * c)) for c in rgb[:3])
               for rgb in S.colors]
-    magma = (np.asarray(plt.get_cmap('magma')(np.linspace(0, 1, 256)))[:, :3]
-             * 255).round().astype(np.uint8)
+    lut = lambda name: (np.asarray(plt.get_cmap(name)(np.linspace(0, 1, 256)))
+                        [:, :3] * 255).round().astype(np.uint8)
 
     return S, dict(
         spT=b64(times, np.float32),
@@ -59,8 +59,14 @@ def build_payload():
         wfAmp=b64(S.wf_amp, np.float32),
         stim=b64(S.stim, np.uint8),
         byDepth=b64(S.by_depth, np.uint16),
-        magma=b64(magma, np.uint8),
+        magma=b64(lut('magma'), np.uint8),
+        rdbu=b64(lut('RdBu_r'), np.uint8),
         colors=colors,
+        trialNorms=list(core.TRIAL_NORMS),
+        neuronNorms=list(core.NEURON_NORMS),
+        stats=list(core.STATS),
+        rateFloor=core.RATE_FLOOR, sdFloor=core.SD_FLOOR,
+        nBoot=core.N_BOOT, bootSeed=core.BOOT_SEED,
         stimNames=S.stim_names,
         stimColors=list(core.STIM_COLORS),
         nNeurons=S.n_neurons, nTrials=S.n_trials, nStim=S.n_stim,
@@ -106,9 +112,29 @@ PAGE = r"""<!doctype html>
     padding:5px 13px; color:var(--mid);
   }
   .steps li b{color:var(--ink); font-weight:700}
+  .controls{
+    display:flex; flex-wrap:wrap; gap:18px 26px; align-items:flex-end;
+    margin-top:20px; padding:14px 16px; background:#fff;
+    border:1px solid var(--rule); border-radius:10px;
+  }
+  .controls .field{display:flex; flex-direction:column; gap:4px; min-width:0}
+  .controls .field b{font-size:12px; letter-spacing:.02em}
+  .controls .field span{font-size:11px; color:var(--faint)}
+  .controls select{
+    font:13px Arial, sans-serif; padding:5px 8px; border-radius:6px;
+    border:1px solid #c9ced6; background:#fff; color:var(--ink); max-width:100%;
+  }
+  .controls .why{
+    flex:1 1 260px; font-size:12px; color:var(--mid); line-height:1.45;
+    min-width:220px;
+  }
+  .floornote{
+    margin:8px 2px 0; font-size:12px; font-style:italic; color:#a33;
+    min-height:15px;
+  }
   .grid{
     display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
-    gap:16px; margin-top:22px;
+    gap:16px; margin-top:14px;
   }
   @media (max-width:900px){ .grid{grid-template-columns:1fr} }
   .panel{
@@ -149,6 +175,25 @@ PAGE = r"""<!doctype html>
     <li><b>4.</b> you are looking at voltage</li>
   </ul>
 </header>
+
+<div class="controls">
+  <label class="field"><b>normalize each TRIAL</b>
+    <span>before averaging trials</span>
+    <select id="sel-trial"></select></label>
+  <label class="field"><b>normalize each NEURON</b>
+    <span>before averaging neurons</span>
+    <select id="sel-neuron"></select></label>
+  <label class="field"><b>average with</b>
+    <span>&nbsp;</span>
+    <select id="sel-stat"></select></label>
+  <p class="why">Try <b>divide by baseline</b> on the TRIAL selector, then move
+  it to the NEURON selector instead. Per neuron the peak is a sane
+  ~3.9&times; over a baseline of 1. Per trial it jumps to ~6.2&times; and the
+  whole post-stimulus period floats near 1.8 &mdash; because each denominator
+  is a baseline estimated from a couple of spikes. Averaging ratios with noisy
+  denominators biases the answer upward.</p>
+</div>
+<p class="floornote" id="floornote"></p>
 
 <div class="grid">
   <div class="panel clickable" id="p-sum"><canvas id="c-sum"></canvas>
@@ -206,7 +251,7 @@ function b64(s, T){
 const SP_T = b64(RAW.spT, Float32Array), SP_IDX = b64(RAW.spIdx, Uint32Array);
 const DEPTH = b64(RAW.depth, Float32Array), WFAMP = b64(RAW.wfAmp, Float32Array);
 const STIM = b64(RAW.stim, Uint8Array), BY_DEPTH = b64(RAW.byDepth, Uint16Array);
-const MAGMA = b64(RAW.magma, Uint8Array);
+const MAGMA = b64(RAW.magma, Uint8Array), RDBU = b64(RAW.rdbu, Uint8Array);
 
 const NN = RAW.nNeurons, NT = RAW.nTrials, NS = RAW.nStim;
 const PRE = RAW.pre, POST = RAW.post, BIN = RAW.bin;
@@ -257,55 +302,203 @@ const RATES = new Float32Array(NN * NT * NB);          // [neuron][trial][bin]
   }
 })();
 
-const PSTH = new Float32Array(NN * NS * NB);           // mean over trials
-(function(){
-  for (let i = 0; i < NN; i++) for (let s = 0; s < NS; s++){
-    const tr = TRIALS_OF[s], o = (i * NS + s) * NB;
-    for (let b = 0; b < NB; b++){
+/* ---------------------------------------------- normalisation & statistic
+ * Mirrors Session.configure() in drilldown_core.py. There are two places you
+ * can normalise and they are not equivalent: per trial (denominator estimated
+ * from a couple of spikes) or per neuron (denominator pooled over all of that
+ * neuron's trials). The neuron step is kept affine so level 2 can apply the
+ * identical transform to single trials.
+ */
+const BASE_N = Math.round(PRE / BIN);            // pre-stimulus bins
+const RATE_FLOOR = RAW.rateFloor, SD_FLOOR = RAW.sdFloor;
+const N_BOOT = RAW.nBoot;
+
+const CFG = {trialNorm:'none', neuronNorm:'none', stat:'mean'};
+let RATES_N, PSTH, NN_OFF, NN_SC, POP;
+let VALUE_LABEL, STAT_LABEL, SPREAD_LABEL, N_FLOORED, N_FLOORED_NEURONS;
+
+const SCRATCH = new Float64Array(512);
+function central(buf, n){
+  if (CFG.stat === 'mean'){
+    let a = 0;
+    for (let k = 0; k < n; k++) a += buf[k];
+    return a / n;
+  }
+  const s = SCRATCH.subarray(0, n);
+  s.set(buf.subarray(0, n));
+  s.sort();
+  const h = n >> 1;
+  return (n & 1) ? s[h] : 0.5 * (s[h-1] + s[h]);
+}
+
+/** Central tendency per bin, plus the standard error OF THAT STATISTIC.
+ *  Mean -> SEM. Median -> bootstrap SE, with resample indices drawn once and
+ *  shared across bins (as the numpy version does). */
+function aggregate(pull, n){
+  const m = new Float64Array(NB), se = new Float64Array(NB);
+  const buf = new Float64Array(n);
+  const even = (n % 2) === 0, h = n >> 1;
+  let sorted = null, bLo = null, bHi = null;
+
+  if (CFG.stat === 'median'){
+    // A bootstrap resample's median is an ORDER STATISTIC of the original
+    // sample: median{x[r1]..x[rn]} == xSorted[median{r1..rn}], because
+    // xSorted is monotone. So draw the ranks once, reduce each resample to
+    // the one or two ranks its median needs, and reuse those for every time
+    // bin. That replaces N_BOOT sorts per bin with a single sort per bin --
+    // exact, not an approximation, and ~40x faster here.
+    const rng = mulberry32(RAW.bootSeed);
+    const ranks = new Int32Array(n);
+    bLo = new Int32Array(N_BOOT);
+    bHi = new Int32Array(N_BOOT);
+    for (let r = 0; r < N_BOOT; r++){
+      for (let k = 0; k < n; k++) ranks[k] = (rng() * n) | 0;
+      ranks.sort();
+      bLo[r] = even ? ranks[h - 1] : ranks[h];
+      bHi[r] = ranks[h];
+    }
+    sorted = new Float64Array(n);
+  }
+
+  for (let b = 0; b < NB; b++){
+    for (let k = 0; k < n; k++) buf[k] = pull(k, b);
+    if (CFG.stat === 'mean'){
       let a = 0;
-      for (let k = 0; k < tr.length; k++) a += RATES[(i * NT + tr[k]) * NB + b];
-      PSTH[o + b] = a / tr.length;
+      for (let k = 0; k < n; k++) a += buf[k];
+      m[b] = a / n;
+      let v = 0;
+      for (let k = 0; k < n; k++){ const d = buf[k] - m[b]; v += d * d; }
+      se[b] = Math.sqrt(v / (n - 1)) / Math.sqrt(n);
+    } else {
+      sorted.set(buf);
+      sorted.sort();
+      m[b] = even ? 0.5 * (sorted[h - 1] + sorted[h]) : sorted[h];
+      let a = 0;
+      for (let r = 0; r < N_BOOT; r++) a += 0.5 * (sorted[bLo[r]] + sorted[bHi[r]]);
+      a /= N_BOOT;
+      let v = 0;
+      for (let r = 0; r < N_BOOT; r++){
+        const d = 0.5 * (sorted[bLo[r]] + sorted[bHi[r]]) - a;
+        v += d * d;
+      }
+      se[b] = Math.sqrt(v / (N_BOOT - 1));
     }
   }
-})();
-
-/** mean and SEM across neurons of the stim-s PSTH */
-function populationMean(s){
-  const m = new Float64Array(NB), sem = new Float64Array(NB);
-  for (let b = 0; b < NB; b++){
-    let a = 0;
-    for (let i = 0; i < NN; i++) a += PSTH[(i * NS + s) * NB + b];
-    m[b] = a / NN;
-    let v = 0;
-    for (let i = 0; i < NN; i++){
-      const d = PSTH[(i * NS + s) * NB + b] - m[b];
-      v += d * d;
-    }
-    sem[b] = Math.sqrt(v / (NN - 1)) / Math.sqrt(NN);   // ddof = 1
-  }
-  return {m, sem};
+  return {m, se};
 }
 
-/** mean and SEM across trials for one neuron and stimulus */
-function neuronMean(i, s){
-  const tr = TRIALS_OF[s], n = tr.length;
-  const m = new Float64Array(NB), sem = new Float64Array(NB);
-  for (let b = 0; b < NB; b++){
+function configure(){
+  // --- per (neuron, trial) baseline
+  const bMean = new Float64Array(NN * NT), bSd = new Float64Array(NN * NT);
+  for (let i = 0; i < NN; i++) for (let j = 0; j < NT; j++){
+    const k = i * NT + j, off = k * NB;
     let a = 0;
-    for (let k = 0; k < n; k++) a += RATES[(i * NT + tr[k]) * NB + b];
-    m[b] = a / n;
+    for (let b = 0; b < BASE_N; b++) a += RATES[off + b];
+    const m = a / BASE_N;
+    bMean[k] = m;
     let v = 0;
-    for (let k = 0; k < n; k++){
-      const d = RATES[(i * NT + tr[k]) * NB + b] - m[b];
-      v += d * d;
-    }
-    sem[b] = Math.sqrt(v / (n - 1)) / Math.sqrt(n);
+    for (let b = 0; b < BASE_N; b++){ const d = RATES[off + b] - m; v += d * d; }
+    bSd[k] = Math.sqrt(v / (BASE_N - 1));
   }
-  return {m, sem};
+
+  // --- trial-level normalisation
+  N_FLOORED = 0;
+  if (CFG.trialNorm === 'none'){
+    RATES_N = RATES;
+  } else {
+    RATES_N = new Float32Array(NN * NT * NB);
+    for (let i = 0; i < NN; i++) for (let j = 0; j < NT; j++){
+      const k = i * NT + j, off = k * NB;
+      let sub = 0, div = 1;
+      if (CFG.trialNorm === 'subtract baseline'){
+        sub = bMean[k];
+      } else if (CFG.trialNorm === 'divide by baseline'){
+        if (bMean[k] < RATE_FLOOR) N_FLOORED++;
+        div = Math.max(bMean[k], RATE_FLOOR);
+      } else {                                    // baseline z-score
+        if (bSd[k] < SD_FLOOR) N_FLOORED++;
+        sub = bMean[k];
+        div = Math.max(bSd[k], SD_FLOOR);
+      }
+      for (let b = 0; b < NB; b++) RATES_N[off + b] = (RATES[off + b] - sub) / div;
+    }
+  }
+
+  // --- aggregate over trials
+  const raw = new Float64Array(NN * NS * NB);
+  const buf = new Float64Array(NT);
+  for (let i = 0; i < NN; i++) for (let s = 0; s < NS; s++){
+    const tr = TRIALS_OF[s], n = tr.length, o = (i * NS + s) * NB;
+    for (let b = 0; b < NB; b++){
+      for (let k = 0; k < n; k++) buf[k] = RATES_N[(i * NT + tr[k]) * NB + b];
+      raw[o + b] = central(buf, n);
+    }
+  }
+
+  // --- neuron-level normalisation, baseline pooled across stimuli
+  NN_OFF = new Float64Array(NN);
+  NN_SC = new Float64Array(NN).fill(1);
+  N_FLOORED_NEURONS = 0;
+  const nb = NS * BASE_N;
+  for (let i = 0; i < NN; i++){
+    let a = 0;
+    for (let s = 0; s < NS; s++) for (let b = 0; b < BASE_N; b++)
+      a += raw[(i * NS + s) * NB + b];
+    const m = a / nb;
+    if (CFG.neuronNorm === 'subtract baseline'){
+      NN_OFF[i] = m;
+    } else if (CFG.neuronNorm === 'divide by baseline'){
+      if (m < RATE_FLOOR) N_FLOORED_NEURONS++;
+      NN_SC[i] = Math.max(m, RATE_FLOOR);
+    } else if (CFG.neuronNorm === 'peak = 1'){
+      let pk = 0;
+      for (let s = 0; s < NS; s++) for (let b = 0; b < NB; b++){
+        const v = Math.abs(raw[(i * NS + s) * NB + b]);
+        if (v > pk) pk = v;
+      }
+      NN_SC[i] = Math.max(pk, 1e-6);
+    } else if (CFG.neuronNorm === 'baseline z-score'){
+      let v = 0;
+      for (let s = 0; s < NS; s++) for (let b = 0; b < BASE_N; b++){
+        const d = raw[(i * NS + s) * NB + b] - m;
+        v += d * d;
+      }
+      const sd = Math.sqrt(v / (nb - 1));
+      if (sd < SD_FLOOR) N_FLOORED_NEURONS++;
+      NN_OFF[i] = m;
+      NN_SC[i] = Math.max(sd, SD_FLOOR);
+    }
+  }
+
+  PSTH = new Float32Array(NN * NS * NB);
+  for (let i = 0; i < NN; i++) for (let s = 0; s < NS; s++)
+    for (let b = 0; b < NB; b++){
+      const o = (i * NS + s) * NB + b;
+      PSTH[o] = (raw[o] - NN_OFF[i]) / NN_SC[i];
+    }
+
+  POP = [];
+  for (let s = 0; s < NS; s++)
+    POP.push(aggregate((k, b) => PSTH[(k * NS + s) * NB + b], NN));
+
+  const last = CFG.neuronNorm !== 'none' ? CFG.neuronNorm : CFG.trialNorm;
+  VALUE_LABEL = {
+    'none':               'firing rate (spikes/s)',
+    'subtract baseline':  'Δ firing rate (spikes/s)',
+    'divide by baseline': 'rate / baseline',
+    'peak = 1':           'normalized rate (peak = 1)',
+    'baseline z-score':   'baseline z-score (SD)',
+  }[last];
+  STAT_LABEL = CFG.stat === 'mean' ? 'Average' : 'Median';
+  SPREAD_LABEL = CFG.stat === 'mean' ? 'SEM' : 'bootstrap SE';
 }
 
-const POP = [];
-for (let s = 0; s < NS; s++) POP.push(populationMean(s));
+/** central tendency and its standard error across trials, one neuron */
+function neuronStat(i, s){
+  const tr = TRIALS_OF[s], off = NN_OFF[i], sc = NN_SC[i];
+  return aggregate((k, b) => (RATES_N[(i * NT + tr[k]) * NB + b] - off) / sc,
+                   tr.length);
+}
 
 /* ------------------------------------------------------- voltage, in JS */
 function mulberry32(a){
@@ -507,6 +700,13 @@ class Plot {
     for (let i = xs.length - 1; i >= 0; i--) x.lineTo(this.X(xs[i]), this.Y(lo[i]));
     x.closePath(); x.fill(); x.restore();
   }
+  hline(v, color, lw){
+    this.clip();
+    const x = this.ctx, a = this.area, py = Math.round(this.Y(v)) + 0.5;
+    x.strokeStyle = color; x.lineWidth = lw || 1;
+    x.beginPath(); x.moveTo(a.x0, py); x.lineTo(a.x1, py); x.stroke();
+    x.restore();
+  }
   vline(v, color, lw){
     this.clip();
     const x = this.ctx, a = this.area, px = Math.round(this.X(v)) + 0.5;
@@ -618,20 +818,34 @@ const state = {stim:null, neuron:null, rowTrial:null, trial:null,
 const TCA = Array.from(TC);
 
 /* ---- level 0 */
+/** y-limits that fit every trace and band, with headroom for the legend */
+function fitY(series){
+  let lo = Infinity, hi = -Infinity;
+  for (const {m, se} of series) for (let b = 0; b < NB; b++){
+    lo = Math.min(lo, m[b] - se[b]);
+    hi = Math.max(hi, m[b] + se[b]);
+  }
+  if (!(hi > lo)) { lo -= 1; hi += 1; }
+  const span = hi - lo;
+  return [Math.min(lo - 0.06 * span, lo), hi + 0.20 * span];
+}
+
 function drawSummary(){
   const p = P.sum;
   p.clear();
-  let hi = 0;
-  for (let s = 0; s < NS; s++) for (let b = 0; b < NB; b++)
-    hi = Math.max(hi, POP[s].m[b] + POP[s].sem[b]);
-  p.limits(TC[0], TC[NB-1], 0, hi * 1.14);
-  p.frame({xlabel:'time from stimulus onset (s)',
-           ylabel:'firing rate (spikes/s)',
-           title:`Average across ${NN} neurons (shading: ±SEM across neurons)`});
+  const [y0, y1] = fitY(POP);
+  p.limits(TC[0], TC[NB-1], y0, y1);
+  p.frame({xlabel:'time from stimulus onset (s)', ylabel:VALUE_LABEL,
+           title:`${STAT_LABEL} across ${NN} neurons `
+                 + `(shading: ±${SPREAD_LABEL} across neurons)`});
   p.vline(0, '#999', 1);
+  if (y0 < 0) p.hline(0, '#ccc', 1);
   for (let s = 0; s < NS; s++){
     const lo = [], up = [];
-    for (let b = 0; b < NB; b++){ lo.push(POP[s].m[b]-POP[s].sem[b]); up.push(POP[s].m[b]+POP[s].sem[b]); }
+    for (let b = 0; b < NB; b++){
+      lo.push(POP[s].m[b] - POP[s].se[b]);
+      up.push(POP[s].m[b] + POP[s].se[b]);
+    }
     p.band(TCA, lo, up, SC[s], 0.5);
     p.line(TCA, Array.from(POP[s].m), SC[s], 2);
   }
@@ -657,13 +871,26 @@ function drawMatrix(){
   p.clear();
   if (s === null){ p.placeholder('click a trace in the panel to the left'); return; }
 
-  const vals = [];
-  for (let k = 0; k < NN * NB; k++){
-    const i = (k / NB) | 0, b = k % NB;
-    vals.push(PSTH[(i * NS + s) * NB + b]);
+  const vals = new Float64Array(NN * NB);
+  let vmin = Infinity;
+  for (let i = 0; i < NN; i++) for (let b = 0; b < NB; b++){
+    const v = PSTH[(i * NS + s) * NB + b];
+    vals[i * NB + b] = v;
+    if (v < vmin) vmin = v;
   }
-  const sorted = Float64Array.from(vals).sort();
-  const vmax = sorted[Math.min(sorted.length-1, Math.floor(0.995*(sorted.length-1)))];
+  // Normalisation can send values below zero; a sequential map would hide the
+  // sign, so switch to a symmetric diverging one.
+  const diverging = vmin < -1e-9;
+  let lo, hi, LUT;
+  if (diverging){
+    const mag = Float64Array.from(vals, Math.abs).sort();
+    hi = mag[Math.floor(0.995 * (mag.length - 1))];
+    lo = -hi; LUT = RDBU;
+  } else {
+    const srt = Float64Array.from(vals).sort();
+    lo = 0; hi = srt[Math.floor(0.995 * (srt.length - 1))]; LUT = MAGMA;
+  }
+  const span = (hi - lo) || 1;
 
   p.limits(TC[0], TC[NB-1], NN - 0.5, -0.5);
   p.image((buf, w, h) => {
@@ -671,10 +898,10 @@ function drawMatrix(){
       const i = Math.min(NN-1, Math.max(0, Math.floor(py / h * NN)));
       for (let px = 0; px < w; px++){
         const b = Math.min(NB-1, Math.max(0, Math.floor(px / w * NB)));
-        let f = PSTH[(i * NS + s) * NB + b] / vmax;
+        let f = (PSTH[(i * NS + s) * NB + b] - lo) / span;
         f = f < 0 ? 0 : f > 1 ? 1 : f;
         const c = Math.round(f * 255) * 3, o = (py * w + px) * 4;
-        buf[o] = MAGMA[c]; buf[o+1] = MAGMA[c+1]; buf[o+2] = MAGMA[c+2]; buf[o+3] = 255;
+        buf[o] = LUT[c]; buf[o+1] = LUT[c+1]; buf[o+2] = LUT[c+2]; buf[o+3] = 255;
       }
     }
   });
@@ -682,7 +909,7 @@ function drawMatrix(){
            title:`Stim ${SNAME[s]}: every neuron behind that average\n(${NN} neurons, ${TRIALS_OF[s].length} trials each)`,
            titleColor:SC[s]});
   p.vline(0, 'rgba(255,255,255,.6)', 1);
-  p.colorbar(0, vmax, MAGMA, 'firing rate (spikes/s)');
+  p.colorbar(lo, hi, LUT, VALUE_LABEL);
   CAP.mat.textContent = 'Click a row to see that neuron.';
 }
 
@@ -729,20 +956,21 @@ function drawNeuron(){
   cx.restore();
   CAP.ras.textContent = 'Click a trial row to see the raw data for that trial.';
 
-  let hi = 0;
   const mm = [];
-  for (let s = 0; s < NS; s++){
-    const r = neuronMean(i, s); mm.push(r);
-    for (let b = 0; b < NB; b++) hi = Math.max(hi, r.m[b] + r.sem[b]);
-  }
-  pp.limits(-PRE, POST, 0, hi * 1.16);
-  pp.frame({xlabel:'time from stimulus onset (s)',
-            ylabel:'firing rate (spikes/s)',
-            title:`Neuron ${i} average PSTHs\n(shading: ±SEM across trials)`});
+  for (let s = 0; s < NS; s++) mm.push(neuronStat(i, s));
+  const [y0, y1] = fitY(mm);
+  pp.limits(-PRE, POST, y0, y1);
+  pp.frame({xlabel:'time from stimulus onset (s)', ylabel:VALUE_LABEL,
+            title:`Neuron ${i} ${CFG.stat} PSTHs\n`
+                  + `(shading: ±${SPREAD_LABEL} across trials)`});
   pp.vline(0, '#999', 1);
+  if (y0 < 0) pp.hline(0, '#ccc', 1);
   for (let s = 0; s < NS; s++){
     const lo = [], up = [];
-    for (let b = 0; b < NB; b++){ lo.push(mm[s].m[b]-mm[s].sem[b]); up.push(mm[s].m[b]+mm[s].sem[b]); }
+    for (let b = 0; b < NB; b++){
+      lo.push(mm[s].m[b] - mm[s].se[b]);
+      up.push(mm[s].m[b] + mm[s].se[b]);
+    }
     pp.band(TCA, lo, up, SC[s], 0.5);
     pp.line(TCA, Array.from(mm[s].m), SC[s], 2);
   }
@@ -917,6 +1145,52 @@ window.addEventListener('keydown', ev => {
 // Canvases are sized by CSS, so their pixel buffers have to follow the
 // layout rather than the window: a ResizeObserver catches the first layout
 // pass (which the inline script beats) as well as later container resizes.
+/* ---- normalisation selectors */
+function fillSelect(el, options, value){
+  el.innerHTML = '';
+  for (const o of options){
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    el.appendChild(opt);
+  }
+  el.value = value;
+}
+const selTrial = document.getElementById('sel-trial');
+const selNeuron = document.getElementById('sel-neuron');
+const selStat = document.getElementById('sel-stat');
+const floorNote = document.getElementById('floornote');
+fillSelect(selTrial, RAW.trialNorms, CFG.trialNorm);
+fillSelect(selNeuron, RAW.neuronNorms, CFG.neuronNorm);
+fillSelect(selStat, RAW.stats, CFG.stat);
+
+function updateFloorNote(){
+  const bits = [];
+  if (N_FLOORED)
+    bits.push(`${N_FLOORED} of ${NN * NT} per-trial baselines`);
+  if (N_FLOORED_NEURONS)
+    bits.push(`${N_FLOORED_NEURONS} of ${NN} per-neuron baselines`);
+  floorNote.textContent = bits.length
+    ? 'divide-by-almost-zero floor applied to ' + bits.join(' and ')
+    : '';
+}
+
+function onConfigChange(){
+  CFG.trialNorm = selTrial.value;
+  CFG.neuronNorm = selNeuron.value;
+  CFG.stat = selStat.value;
+  // The median path bootstraps, which takes a moment; let the browser paint
+  // the disabled controls before we block on it.
+  for (const el of [selTrial, selNeuron, selStat]) el.disabled = true;
+  setTimeout(() => {
+    configure();
+    updateFloorNote();
+    redraw();               // level 3 is spikes and voltage; unaffected but cheap
+    for (const el of [selTrial, selNeuron, selStat]) el.disabled = false;
+  }, 0);
+}
+for (const el of [selTrial, selNeuron, selStat])
+  el.addEventListener('change', onConfigChange);
+
 let rt = null;
 function scheduleRedraw(){
   clearTimeout(rt);
@@ -926,6 +1200,8 @@ const ro = new ResizeObserver(scheduleRedraw);
 ro.observe(document.querySelector('.grid'));
 window.addEventListener('resize', scheduleRedraw);
 
+configure();
+updateFloorNote();
 redraw();
 markClickable();
 </script>

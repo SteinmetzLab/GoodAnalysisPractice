@@ -27,7 +27,7 @@ scale. The grey band on the raster marks exactly what the voltage panel is
 showing. Click the raster to move that window, and press `d` to hide the dots
 if you want to see the waveforms unobscured.
 
-## Normalization and statistic selectors (standalone script only)
+## Normalization and statistic selectors
 
 The level-0 window carries three selectors. Changing any of them rebuilds
 levels 0–2 **in place**, so you can watch the published figure change shape
@@ -63,9 +63,17 @@ Two things worth knowing:
   rate across 40 trials is often exactly zero, so the B and C traces flatten
   onto the axis. That is a true statement about sparse spike trains, not a bug.
 
-The notebook and web versions currently use the defaults (no normalization,
-mean). `Session.configure()` in `drilldown_core.py` is where this lives, so
-wiring selectors into them later is not much work.
+**The standalone script and the web version both have these selectors**; the
+notebook still uses the defaults. `Session.configure()` in `drilldown_core.py`
+is the Python implementation, and the web version reimplements it in
+JavaScript — the two agree exactly on every mean-based combination (e.g.
+18.79 / 10.82 / 9.86 spikes/s raw, 3.87 / 2.14 / 2.04 for per-neuron ratios,
+6.21 / 3.26 / 3.00 for per-trial ratios with 959 floored baselines).
+
+One implementation note on the web version: a bootstrap resample's median is an
+*order statistic* of the original sample, so the resample ranks can be reduced
+once and reused across all 120 time bins instead of sorting per bin. That is
+exact, not an approximation, and it took the median path from 1.1 s to 275 ms.
 
 ## Three versions, one core
 
