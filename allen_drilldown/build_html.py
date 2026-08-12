@@ -1,0 +1,1056 @@
+"""
+Build web/index.html -- the drill-down over real Allen Institute Visual Coding
+Neuropixels data.
+
+The page fetches web/data.bin (written by build_data.py), bins and smooths the
+PSTHs in the browser, and draws everything on <canvas>. No libraries.
+
+Levels 0-2 plus the trial raster of level 3; the raw-voltage panel is not wired
+up yet (see ../plotting_drilldown_demo/REAL_DATA_PLAN.md).
+
+Run:  python build_html.py
+"""
+
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'web', 'index.html')
+
+PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drill-down: orientation tuning in mouse V1 (Allen Neuropixels)</title>
+<style>
+  :root{
+    --ink:#1b1b1d; --mid:#5a5f66; --faint:#9aa0a8;
+    --rule:#e2e5ea; --panel:#fff; --page:#f4f6f8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--page); color:var(--ink);
+    font:15px/1.55 Arial, "Helvetica Neue", Helvetica, sans-serif;
+  }
+  .wrap{max-width:1280px; margin:0 auto; padding:28px 20px 64px}
+  header h1{font-size:25px; margin:0 0 8px; letter-spacing:-.01em}
+  header p{margin:0 0 8px; color:var(--mid); max-width:78ch}
+  header .lede{color:var(--ink)}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 0; padding:0;
+    list-style:none; font-size:12px;
+  }
+  .meta li{
+    background:#fff; border:1px solid var(--rule); border-radius:999px;
+    padding:5px 13px; color:var(--mid);
+  }
+  .meta li b{color:var(--ink)}
+  .controls{
+    display:flex; flex-wrap:wrap; gap:18px 26px; align-items:flex-end;
+    margin-top:18px; padding:14px 16px; background:#fff;
+    border:1px solid var(--rule); border-radius:10px;
+  }
+  .controls .field{display:flex; flex-direction:column; gap:4px; min-width:0}
+  .controls .field b{font-size:12px; letter-spacing:.02em}
+  .controls .field span{font-size:11px; color:var(--faint)}
+  .controls select{
+    font:13px Arial, sans-serif; padding:5px 8px; border-radius:6px;
+    border:1px solid #c9ced6; background:#fff; color:var(--ink); max-width:100%;
+  }
+  .controls .why{
+    flex:1 1 280px; font-size:12px; color:var(--mid); line-height:1.45;
+    min-width:220px;
+  }
+  .floornote{
+    margin:8px 2px 0; font-size:12px; font-style:italic; color:#a33;
+    min-height:15px;
+  }
+  .grid{
+    display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
+    gap:16px; margin-top:14px;
+  }
+  @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+  .panel{
+    background:var(--panel); border:1px solid var(--rule); border-radius:10px;
+    padding:10px 12px 12px; min-width:0;
+  }
+  .panel.wide{grid-column:1 / -1}
+  .panel canvas{width:100%; height:330px; display:block; cursor:default}
+  .panel.wide canvas{height:380px}
+  .panel.clickable canvas{cursor:pointer}
+  .cap{
+    font-size:12px; color:var(--faint); margin:6px 2px 0; min-height:16px;
+    font-style:italic;
+  }
+  #loading{
+    padding:40px 16px; text-align:center; color:var(--mid); font-size:14px;
+  }
+  footer{
+    margin-top:34px; padding-top:18px; border-top:1px solid var(--rule);
+    color:var(--mid); font-size:13px; max-width:82ch;
+  }
+  footer h3{font-size:14px; color:var(--ink); margin:18px 0 6px}
+  footer code{
+    background:#eceff3; padding:1px 5px; border-radius:4px; font-size:12px;
+  }
+  kbd{
+    background:#fff; border:1px solid #c9ced6; border-bottom-width:2px;
+    border-radius:4px; padding:0 5px; font:12px/1.5 inherit;
+  }
+  a{color:#0060b0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Orientation tuning in mouse V1, one click at a time</h1>
+  <p class="lede">Real Neuropixels data. This starts with the figure everyone
+  publishes &mdash; the average response across all recorded neurons, one trace
+  per grating direction &mdash; and lets you click down to the data it was
+  computed from.</p>
+  <p><b>The population average is almost flat.</b> That is not a bug and not a
+  dead recording: three quarters of these neurons are strongly
+  orientation-tuned, but they prefer <i>different</i> orientations, so
+  averaging across them cancels the tuning out. You cannot see that from the
+  top panel. You can see it immediately one level down.</p>
+  <ul class="meta" id="meta"></ul>
+</header>
+
+<div id="loading">loading ~2.3&nbsp;MB of spike times and binning them&hellip;</div>
+
+<div id="app" style="display:none">
+<div class="controls">
+  <label class="field"><b>normalize each TRIAL</b>
+    <span>before averaging trials</span>
+    <select id="sel-trial"></select></label>
+  <label class="field"><b>normalize each NEURON</b>
+    <span>before averaging neurons</span>
+    <select id="sel-neuron"></select></label>
+  <label class="field"><b>average with</b>
+    <span>&nbsp;</span>
+    <select id="sel-stat"></select></label>
+  <p class="why">On real data these matter more than on simulated data. Many
+  V1 units have baselines near zero, so <b>divide by baseline</b> on the TRIAL
+  selector &mdash; a denominator estimated from a couple of spikes &mdash;
+  blows up in a way the per-NEURON version does not. Try
+  <b>peak&nbsp;=&nbsp;1</b> on the NEURON selector to see the tuning survive
+  averaging.</p>
+</div>
+<p class="floornote" id="floornote"></p>
+
+<div class="grid">
+  <div class="panel clickable" id="p-sum"><canvas id="c-sum"></canvas>
+    <p class="cap">Click a trace &mdash; or, easier with eight overlapping traces, click its legend entry.</p></div>
+  <div class="panel" id="p-mat"><canvas id="c-mat"></canvas>
+    <p class="cap" id="cap-mat"></p></div>
+  <div class="panel" id="p-ras"><canvas id="c-ras"></canvas>
+    <p class="cap" id="cap-ras"></p></div>
+  <div class="panel" id="p-psth"><canvas id="c-psth"></canvas>
+    <p class="cap"></p></div>
+  <div class="panel wide" id="p-trial"><canvas id="c-trial"></canvas>
+    <p class="cap" id="cap-trial"></p></div>
+</div>
+</div>
+
+<footer>
+  <h3>What you are looking at</h3>
+  <p>One probe from one session of the Allen Institute
+  <a href="https://allensdk.readthedocs.io/en/latest/visual_coding_neuropixels.html">Visual
+  Coding &ndash; Neuropixels</a> dataset. The stimulus is drifting gratings:
+  8 directions &times; 5 temporal frequencies &times; 15 repeats. We pool
+  across temporal frequency, so each direction has ~75 trials. Grey shading
+  marks the 2&nbsp;s the grating was on screen.</p>
+
+  <h3>The dots are somebody's opinion</h3>
+  <p>Every spike here is the output of a spike sorter (Kilosort2), not ground
+  truth. A unit that looks beautifully tuned might be two cells merged; a
+  silent one might be a real cell whose spikes were split across two clusters.
+  The units shown are the ones that pass Allen's default quality control
+  &mdash; <code>quality = good</code>, amplitude cutoff &lt; 0.1, presence
+  ratio &gt; 0.95, ISI violations &lt; 0.5. That filter is a scientific choice,
+  and the population average at the top depends on it.</p>
+
+  <h3>Not here yet</h3>
+  <p>The deepest level of this drill-down &mdash; the raw voltage on the probe
+  with a coloured dot on every spike &mdash; is not wired up. Allen does
+  publish the continuous spike-band traces, but their S3 bucket sends no CORS
+  header, so a web page cannot read it directly; the snippets have to be
+  pre-extracted and hosted alongside this page. Level 3 below currently shows
+  only the all-neuron raster for the trial you picked.</p>
+
+  <p>A <a href="https://drilldown-psth-to-voltage.netlify.app">synthetic-data
+  version</a> of the same drill-down does include the voltage level. Code for
+  both is in the
+  <a href="https://github.com/SteinmetzLab/GoodAnalysisPractice">Good Analysis
+  Practice</a> repository.</p>
+</footer>
+</div>
+
+<script>
+"use strict";
+
+const TYPES = {uint8:Uint8Array, uint16:Uint16Array, uint32:Uint32Array,
+               int32:Int32Array, float32:Float32Array, float64:Float64Array};
+
+let H, A, NU, NT, NC, NB, PRE, POST, BIN, QUANT, TC, TCA, CC;
+let TRIALS_OF, RATES, BASE_N;
+
+/* ---------------------------------------------------------------- loading */
+async function load(){
+  const raw = await (await fetch('data.bin', {cache:'force-cache'})).arrayBuffer();
+  const dv = new DataView(raw);
+  const hlen = dv.getUint32(0, true);
+  H = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 4, hlen)));
+  A = {};
+  for (const [name, dt] of Object.entries(H.dtypes))
+    A[name] = new TYPES[dt](raw, H.offsets[name], H.lengths[name]);
+
+  NU = H.nUnits; NT = H.nTrials; NC = H.nCond; NB = H.nBins;
+  PRE = H.pre; POST = H.post; BIN = H.bin; QUANT = H.quant;
+  BASE_N = Math.round(PRE / BIN);
+
+  TC = new Float64Array(NB);
+  for (let b = 0; b < NB; b++) TC[b] = -PRE + (b + 0.5) * BIN;
+  TCA = Array.from(TC);
+
+  // Cyclic palette: directions 180 deg apart get opposite hues, which keeps
+  // the two lobes of an orientation-tuned cell easy to tell apart.
+  CC = [];
+  for (let c = 0; c < NC; c++) CC.push(`hsl(${Math.round(c / NC * 360)},68%,42%)`);
+
+  TRIALS_OF = [];
+  for (let c = 0; c < NC; c++) TRIALS_OF.push([]);
+  for (let j = 0; j < NT; j++) TRIALS_OF[A.cond[j]].push(j);
+
+  binSpikes();
+}
+
+const SCALE_T = () => (PRE + POST) / QUANT;
+function spikes(i, j){                        // seconds relative to onset
+  const k = i * NT + j, s = A.spIdx[k], e = A.spIdx[k+1];
+  const out = new Float64Array(e - s), f = SCALE_T();
+  for (let m = 0; m < out.length; m++) out[m] = A.spT[s + m] * f - PRE;
+  return out;
+}
+
+/** Bin every (unit, trial) into smoothed rates once; normalisation and
+ *  aggregation work off this array afterwards. */
+function binSpikes(){
+  RATES = new Float32Array(NU * NT * NB);
+  const sd = 1.0, half = 4;                   // smoothing sd = one bin
+  const kern = new Float64Array(2*half+1);
+  let ksum = 0;
+  for (let q = -half; q <= half; q++){
+    kern[q+half] = Math.exp(-0.5*(q/sd)*(q/sd)); ksum += kern[q+half];
+  }
+  for (let q = 0; q < kern.length; q++) kern[q] /= ksum;
+
+  const tmp = new Float64Array(NB), f = SCALE_T();
+  for (let i = 0; i < NU; i++) for (let j = 0; j < NT; j++){
+    tmp.fill(0);
+    const k = i*NT + j, s = A.spIdx[k], e = A.spIdx[k+1];
+    for (let m = s; m < e; m++){
+      const b = Math.floor(A.spT[m] * f / BIN);
+      if (b >= 0 && b < NB) tmp[b] += 1 / BIN;
+    }
+    const off = k * NB;
+    for (let b = 0; b < NB; b++){
+      let acc = 0;
+      for (let q = -half; q <= half; q++){
+        let bb = b + q;
+        if (bb < 0) bb = 0; else if (bb >= NB) bb = NB - 1;
+        acc += tmp[bb] * kern[q+half];
+      }
+      RATES[off + b] = acc;
+    }
+  }
+}
+
+__ANALYSIS__
+
+__PLOT__
+
+__PANELS__
+
+/* ------------------------------------------------------------------ start */
+load().then(() => {
+  document.getElementById('meta').innerHTML = [
+    `session <b>${H.sessionId}</b>`,
+    `probe <b>${H.probeName}</b>`,
+    `<b>${H.structure}</b> (primary visual cortex)`,
+    `<b>${NU}</b> units passing QC`,
+    `<b>${NT}</b> grating trials`,
+    `<b>${NC}</b> directions`,
+    `depth <b>${Math.min(...A.depth)}–${Math.max(...A.depth)}</b> µm on probe`,
+  ].map(s => `<li>${s}</li>`).join('');
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  initPanels();
+}).catch(err => {
+  document.getElementById('loading').textContent = 'failed to load data.bin: ' + err;
+  console.error(err);
+});
+</script>
+</body>
+</html>
+"""
+
+# ---------------------------------------------------------------------------
+ANALYSIS = r"""
+/* ---------------------------------------------- normalisation & statistic */
+const RATE_FLOOR = 1.0, SD_FLOOR = 0.5, N_BOOT = 200, BOOT_SEED = 11;
+const TRIAL_NORMS = ['none','subtract baseline','divide by baseline','baseline z-score'];
+const NEURON_NORMS = ['none','subtract baseline','divide by baseline','peak = 1','baseline z-score'];
+const STATS = ['mean','median'];
+
+const CFG = {trialNorm:'none', neuronNorm:'none', stat:'mean'};
+let RATES_N, PSTH, NN_OFF, NN_SC, POP;
+let VALUE_LABEL, STAT_LABEL, SPREAD_LABEL, N_FLOORED, N_FLOORED_NEURONS;
+
+function mulberry32(a){
+  return function(){
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/** Hoare-partition quickselect: the k-th smallest, in place, O(n) average.
+ *  The trial-aggregation loop calls this ~105,000 times per reconfigure, and
+ *  a full sort there costs seconds. */
+function selectKth(a, n, k){
+  let lo = 0, hi = n - 1;
+  while (lo < hi){
+    const p = a[(lo + hi) >> 1];
+    let i = lo, j = hi;
+    while (i <= j){
+      while (a[i] < p) i++;
+      while (a[j] > p) j--;
+      if (i <= j){ const t = a[i]; a[i] = a[j]; a[j] = t; i++; j--; }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else break;
+  }
+  return a[k];
+}
+
+/** Central tendency. NOTE: for a median this reorders `buf` in place, which
+ *  every caller here is fine with (they refill it each bin). */
+function central(buf, n){
+  if (CFG.stat === 'mean'){
+    let a = 0;
+    for (let k = 0; k < n; k++) a += buf[k];
+    return a / n;
+  }
+  const h = n >> 1;
+  if (n & 1) return selectKth(buf, n, h);
+  // Even n: after selecting the h-th, everything left of it is <= it, so the
+  // lower middle value is just the max of that side.
+  const up = selectKth(buf, n, h);
+  let lo = -Infinity;
+  for (let k = 0; k < h; k++) if (buf[k] > lo) lo = buf[k];
+  return 0.5 * (lo + up);
+}
+
+/** Central tendency per bin plus the standard error OF THAT STATISTIC.
+ *  A bootstrap resample's median is an order statistic of the original
+ *  sample, so the resample ranks reduce to one or two indices that are reused
+ *  across every bin -- exact, and far cheaper than sorting per bin. */
+function aggregate(pull, n){
+  const m = new Float64Array(NB), se = new Float64Array(NB);
+  const buf = new Float64Array(n);
+  const even = (n % 2) === 0, h = n >> 1;
+  let sorted = null, bLo = null, bHi = null;
+  if (CFG.stat === 'median'){
+    const rng = mulberry32(BOOT_SEED), ranks = new Int32Array(n);
+    bLo = new Int32Array(N_BOOT); bHi = new Int32Array(N_BOOT);
+    for (let r = 0; r < N_BOOT; r++){
+      for (let k = 0; k < n; k++) ranks[k] = (rng() * n) | 0;
+      ranks.sort();
+      bLo[r] = even ? ranks[h-1] : ranks[h];
+      bHi[r] = ranks[h];
+    }
+    sorted = new Float64Array(n);
+  }
+  for (let b = 0; b < NB; b++){
+    for (let k = 0; k < n; k++) buf[k] = pull(k, b);
+    if (CFG.stat === 'mean'){
+      let a = 0;
+      for (let k = 0; k < n; k++) a += buf[k];
+      m[b] = a / n;
+      let v = 0;
+      for (let k = 0; k < n; k++){ const d = buf[k]-m[b]; v += d*d; }
+      se[b] = Math.sqrt(v/(n-1))/Math.sqrt(n);
+    } else {
+      // The bootstrap needs true order statistics, so this one really sorts.
+      sorted.set(buf); sorted.sort();
+      m[b] = even ? 0.5*(sorted[h-1]+sorted[h]) : sorted[h];
+      let a = 0;
+      for (let r = 0; r < N_BOOT; r++) a += 0.5*(sorted[bLo[r]]+sorted[bHi[r]]);
+      a /= N_BOOT;
+      let v = 0;
+      for (let r = 0; r < N_BOOT; r++){
+        const d = 0.5*(sorted[bLo[r]]+sorted[bHi[r]]) - a; v += d*d;
+      }
+      se[b] = Math.sqrt(v/(N_BOOT-1));
+    }
+  }
+  return {m, se};
+}
+
+function configure(){
+  const bMean = new Float64Array(NU*NT), bSd = new Float64Array(NU*NT);
+  for (let i = 0; i < NU; i++) for (let j = 0; j < NT; j++){
+    const k = i*NT + j, off = k*NB;
+    let a = 0;
+    for (let b = 0; b < BASE_N; b++) a += RATES[off+b];
+    const m = a / BASE_N;
+    bMean[k] = m;
+    let v = 0;
+    for (let b = 0; b < BASE_N; b++){ const d = RATES[off+b]-m; v += d*d; }
+    bSd[k] = Math.sqrt(v/(BASE_N-1));
+  }
+
+  N_FLOORED = 0;
+  if (CFG.trialNorm === 'none'){
+    RATES_N = RATES;
+  } else {
+    RATES_N = new Float32Array(NU*NT*NB);
+    for (let i = 0; i < NU; i++) for (let j = 0; j < NT; j++){
+      const k = i*NT + j, off = k*NB;
+      let sub = 0, div = 1;
+      if (CFG.trialNorm === 'subtract baseline') sub = bMean[k];
+      else if (CFG.trialNorm === 'divide by baseline'){
+        if (bMean[k] < RATE_FLOOR) N_FLOORED++;
+        div = Math.max(bMean[k], RATE_FLOOR);
+      } else {
+        if (bSd[k] < SD_FLOOR) N_FLOORED++;
+        sub = bMean[k]; div = Math.max(bSd[k], SD_FLOOR);
+      }
+      for (let b = 0; b < NB; b++) RATES_N[off+b] = (RATES[off+b]-sub)/div;
+    }
+  }
+
+  const raw = new Float64Array(NU*NC*NB), buf = new Float64Array(NT);
+  const offs = new Int32Array(NT);
+  for (let i = 0; i < NU; i++) for (let c = 0; c < NC; c++){
+    const tr = TRIALS_OF[c], n = tr.length, o = (i*NC + c)*NB;
+    for (let k = 0; k < n; k++) offs[k] = (i*NT + tr[k]) * NB;   // hoist
+    for (let b = 0; b < NB; b++){
+      for (let k = 0; k < n; k++) buf[k] = RATES_N[offs[k] + b];
+      raw[o+b] = central(buf, n);
+    }
+  }
+
+  NN_OFF = new Float64Array(NU);
+  NN_SC = new Float64Array(NU).fill(1);
+  N_FLOORED_NEURONS = 0;
+  const nb = NC * BASE_N;
+  for (let i = 0; i < NU; i++){
+    let a = 0;
+    for (let c = 0; c < NC; c++) for (let b = 0; b < BASE_N; b++)
+      a += raw[(i*NC + c)*NB + b];
+    const m = a / nb;
+    if (CFG.neuronNorm === 'subtract baseline') NN_OFF[i] = m;
+    else if (CFG.neuronNorm === 'divide by baseline'){
+      if (m < RATE_FLOOR) N_FLOORED_NEURONS++;
+      NN_SC[i] = Math.max(m, RATE_FLOOR);
+    } else if (CFG.neuronNorm === 'peak = 1'){
+      let pk = 0;
+      for (let c = 0; c < NC; c++) for (let b = 0; b < NB; b++){
+        const v = Math.abs(raw[(i*NC + c)*NB + b]); if (v > pk) pk = v;
+      }
+      NN_SC[i] = Math.max(pk, 1e-6);
+    } else if (CFG.neuronNorm === 'baseline z-score'){
+      let v = 0;
+      for (let c = 0; c < NC; c++) for (let b = 0; b < BASE_N; b++){
+        const d = raw[(i*NC + c)*NB + b] - m; v += d*d;
+      }
+      const sd = Math.sqrt(v/(nb-1));
+      if (sd < SD_FLOOR) N_FLOORED_NEURONS++;
+      NN_OFF[i] = m; NN_SC[i] = Math.max(sd, SD_FLOOR);
+    }
+  }
+
+  PSTH = new Float32Array(NU*NC*NB);
+  for (let i = 0; i < NU; i++) for (let c = 0; c < NC; c++)
+    for (let b = 0; b < NB; b++){
+      const o = (i*NC + c)*NB + b;
+      PSTH[o] = (raw[o] - NN_OFF[i]) / NN_SC[i];
+    }
+
+  POP = [];
+  for (let c = 0; c < NC; c++)
+    POP.push(aggregate((k,b) => PSTH[(k*NC + c)*NB + b], NU));
+
+  const last = CFG.neuronNorm !== 'none' ? CFG.neuronNorm : CFG.trialNorm;
+  VALUE_LABEL = {
+    'none':               'firing rate (spikes/s)',
+    'subtract baseline':  'Δ firing rate (spikes/s)',
+    'divide by baseline': 'rate / baseline',
+    'peak = 1':           'normalized rate (peak = 1)',
+    'baseline z-score':   'baseline z-score (SD)',
+  }[last];
+  STAT_LABEL = CFG.stat === 'mean' ? 'Average' : 'Median';
+  SPREAD_LABEL = CFG.stat === 'mean' ? 'SEM' : 'bootstrap SE';
+}
+
+function unitStat(i, c){
+  const tr = TRIALS_OF[c], off = NN_OFF[i], sc = NN_SC[i];
+  return aggregate((k,b) => (RATES_N[(i*NT + tr[k])*NB + b] - off)/sc, tr.length);
+}
+"""
+
+# ---------------------------------------------------------------------------
+PLOT = r"""
+/* ------------------------------------------------------- plotting layer */
+function niceTicks(a, b, target){
+  const lo = Math.min(a,b), hi = Math.max(a,b), span = hi - lo;
+  if (!(span > 0)) return {vals:[lo], step:1};
+  const raw = span / target, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const step = (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
+  const vals = [];
+  for (let v = Math.ceil(lo/step)*step; v <= hi + step*1e-9; v += step)
+    vals.push(Math.abs(v) < step*1e-9 ? 0 : v);
+  return {vals, step};
+}
+function fmtTick(v, step){
+  const d = Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9)));
+  return v.toFixed(d);
+}
+
+class Plot {
+  constructor(canvas, margins){
+    this.c = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.m = Object.assign({l:64, r:16, t:42, b:46}, margins || {});
+  }
+  resize(){
+    const r = this.c.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.dpr = dpr;
+    this.c.width = Math.max(1, Math.round(r.width * dpr));
+    this.c.height = Math.max(1, Math.round(r.height * dpr));
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  get area(){
+    return {x0:this.m.l, x1:this.w - this.m.r, y0:this.m.t, y1:this.h - this.m.b};
+  }
+  limits(x0,x1,y0,y1){ this.xl = [x0,x1]; this.yl = [y0,y1]; }
+  X(v){ const a=this.area; return a.x0 + (v-this.xl[0])/(this.xl[1]-this.xl[0])*(a.x1-a.x0); }
+  Y(v){ const a=this.area; return a.y1 - (v-this.yl[0])/(this.yl[1]-this.yl[0])*(a.y1-a.y0); }
+  invX(px){ const a=this.area; return this.xl[0] + (px-a.x0)/(a.x1-a.x0)*(this.xl[1]-this.xl[0]); }
+  invY(py){ const a=this.area; return this.yl[0] + (a.y1-py)/(a.y1-a.y0)*(this.yl[1]-this.yl[0]); }
+  inside(px,py){ const a=this.area; return px>=a.x0 && px<=a.x1 && py>=a.y0 && py<=a.y1; }
+  clear(){ this.resize(); this.ctx.clearRect(0,0,this.w,this.h); }
+  placeholder(text){
+    this.clear();
+    const x = this.ctx;
+    x.fillStyle='#9aa0a8'; x.font='italic 13px Arial, sans-serif';
+    x.textAlign='center'; x.textBaseline='middle';
+    x.fillText(text, this.w/2, this.h/2);
+  }
+  frame(o){
+    const x = this.ctx, a = this.area;
+    x.save();
+    x.strokeStyle='#1b1b1d'; x.fillStyle='#1b1b1d'; x.lineWidth=1;
+    x.font='11px Arial, sans-serif';
+    const xt = niceTicks(this.xl[0], this.xl[1], 6);
+    x.textAlign='center'; x.textBaseline='top';
+    for (const v of xt.vals){
+      const px = Math.round(this.X(v))+0.5;
+      if (px < a.x0-0.6 || px > a.x1+0.6) continue;
+      x.beginPath(); x.moveTo(px,a.y1); x.lineTo(px,a.y1+4); x.stroke();
+      x.fillText(fmtTick(v, xt.step), px, a.y1+7);
+    }
+    const yt = niceTicks(this.yl[0], this.yl[1], 5);
+    x.textAlign='right'; x.textBaseline='middle';
+    for (const v of yt.vals){
+      const py = Math.round(this.Y(v))+0.5;
+      if (py < a.y0-0.6 || py > a.y1+0.6) continue;
+      x.beginPath(); x.moveTo(a.x0,py); x.lineTo(a.x0-4,py); x.stroke();
+      x.fillText(fmtTick(v, yt.step), a.x0-7, py);
+    }
+    x.beginPath();
+    x.moveTo(a.x0+0.5,a.y0); x.lineTo(a.x0+0.5,a.y1+0.5);
+    x.lineTo(a.x1,a.y1+0.5); x.stroke();
+    x.font='12px Arial, sans-serif';
+    x.textAlign='center'; x.textBaseline='bottom';
+    if (o.xlabel) x.fillText(o.xlabel, (a.x0+a.x1)/2, this.h-6);
+    if (o.ylabel){
+      x.save(); x.translate(12,(a.y0+a.y1)/2); x.rotate(-Math.PI/2);
+      x.textBaseline='top'; x.fillText(o.ylabel,0,0); x.restore();
+    }
+    if (o.title){
+      x.fillStyle = o.titleColor || '#1b1b1d';
+      x.textBaseline='top';
+      const lines = o.title.split('\n');
+      let fs = 13;
+      for (; fs > 9; fs--){
+        x.font = fs+'px Arial, sans-serif';
+        if (Math.max(...lines.map(L => x.measureText(L).width)) <= this.w-10) break;
+      }
+      x.font = fs+'px Arial, sans-serif';
+      lines.forEach((L,k) => x.fillText(L, this.w/2, 4 + k*(fs+2)));
+    }
+    x.restore();
+  }
+  clip(){
+    const a = this.area, x = this.ctx;
+    x.save(); x.beginPath(); x.rect(a.x0,a.y0,a.x1-a.x0,a.y1-a.y0); x.clip();
+  }
+  line(xs, ys, color, lw){
+    this.clip();
+    const x = this.ctx;
+    x.strokeStyle=color; x.lineWidth=lw||2; x.lineJoin='round'; x.beginPath();
+    for (let i=0;i<xs.length;i++){
+      const px=this.X(xs[i]), py=this.Y(ys[i]);
+      i ? x.lineTo(px,py) : x.moveTo(px,py);
+    }
+    x.stroke(); x.restore();
+  }
+  band(xs, lo, hi, color, alpha){
+    this.clip();
+    const x = this.ctx;
+    x.globalAlpha=alpha; x.fillStyle=color; x.beginPath();
+    for (let i=0;i<xs.length;i++){
+      const px=this.X(xs[i]), py=this.Y(hi[i]);
+      i ? x.lineTo(px,py) : x.moveTo(px,py);
+    }
+    for (let i=xs.length-1;i>=0;i--) x.lineTo(this.X(xs[i]), this.Y(lo[i]));
+    x.closePath(); x.fill(); x.restore();
+  }
+  vline(v,color,lw){
+    this.clip();
+    const x=this.ctx, a=this.area, px=Math.round(this.X(v))+0.5;
+    x.strokeStyle=color; x.lineWidth=lw||1;
+    x.beginPath(); x.moveTo(px,a.y0); x.lineTo(px,a.y1); x.stroke(); x.restore();
+  }
+  hline(v,color,lw){
+    this.clip();
+    const x=this.ctx, a=this.area, py=Math.round(this.Y(v))+0.5;
+    x.strokeStyle=color; x.lineWidth=lw||1;
+    x.beginPath(); x.moveTo(a.x0,py); x.lineTo(a.x1,py); x.stroke(); x.restore();
+  }
+  vspan(x0,x1,color){
+    this.clip();
+    const x=this.ctx, a=this.area;
+    x.fillStyle=color;
+    x.fillRect(this.X(x0), a.y0, this.X(x1)-this.X(x0), a.y1-a.y0);
+    x.restore();
+  }
+  raster(rows, halfHeight, lw){
+    this.clip();
+    const x = this.ctx;
+    x.lineWidth = lw || 1;
+    for (const r of rows){
+      const y0=this.Y(r.y-halfHeight), y1=this.Y(r.y+halfHeight);
+      x.strokeStyle = r.color; x.beginPath();
+      for (let k=0;k<r.t.length;k++){
+        const px = Math.round(this.X(r.t[k]))+0.5;
+        x.moveTo(px,y0); x.lineTo(px,y1);
+      }
+      x.stroke();
+    }
+    x.restore();
+  }
+  image(fill){
+    const a=this.area, d=this.dpr, x=this.ctx;
+    const w=Math.max(1,Math.round((a.x1-a.x0)*d));
+    const h=Math.max(1,Math.round((a.y1-a.y0)*d));
+    const img = x.createImageData(w,h);
+    fill(img.data, w, h);
+    x.save(); x.setTransform(1,0,0,1,0,0);
+    x.putImageData(img, Math.round(a.x0*d), Math.round(a.y0*d));
+    x.restore();
+  }
+  colorbar(vmin, vmax, lut, label){
+    const x=this.ctx, a=this.area;
+    const bx=a.x1+12, bw=13, by=a.y0, bh=a.y1-a.y0;
+    const g = x.createLinearGradient(0, by+bh, 0, by);
+    for (let k=0;k<=10;k++){
+      const i = Math.round(k/10*255)*3;
+      g.addColorStop(k/10, `rgb(${lut[i]},${lut[i+1]},${lut[i+2]})`);
+    }
+    x.fillStyle=g; x.fillRect(bx,by,bw,bh);
+    x.strokeStyle='#c9ced6'; x.lineWidth=1;
+    x.strokeRect(bx+0.5,by+0.5,bw-1,bh-1);
+    x.fillStyle='#1b1b1d'; x.font='11px Arial, sans-serif';
+    x.textAlign='left'; x.textBaseline='middle';
+    const t = niceTicks(vmin,vmax,4);
+    for (const v of t.vals){
+      const py = by + bh - (v-vmin)/(vmax-vmin)*bh;
+      x.fillText(fmtTick(v,t.step), bx+bw+4, py);
+    }
+    x.save();
+    x.translate(this.w-3,(by+by+bh)/2); x.rotate(-Math.PI/2);
+    x.textAlign='center'; x.textBaseline='bottom';
+    x.font='11px Arial, sans-serif'; x.fillText(label,0,0);
+    x.restore();
+  }
+}
+
+/* magma and RdBu_r, 256 x RGB, generated by matplotlib */
+const MAGMA = Uint8Array.from(atob("__MAGMA__"), ch => ch.charCodeAt(0));
+const RDBU  = Uint8Array.from(atob("__RDBU__"),  ch => ch.charCodeAt(0));
+"""
+
+# ---------------------------------------------------------------------------
+PANELS = r"""
+/* --------------------------------------------------------------- panels */
+let P, CAP, state;
+
+/** Draws the legend and records hit boxes, so entries can be clicked. With
+ *  eight overlapping traces, picking one by clicking the curve is fiddly;
+ *  clicking its legend entry is not. */
+function legend(p, items, cols){
+  const x = p.ctx, a = p.area;
+  x.save(); x.font='11px Arial, sans-serif'; x.textBaseline='middle';
+  const rows = Math.ceil(items.length / cols), colW = 60;
+  p.legendBoxes = [];
+  items.forEach((it, k) => {
+    const col = Math.floor(k / rows), row = k % rows;
+    const bx = a.x1 - (cols-col)*colW, by = a.y0 + 9 + row*14;
+    x.strokeStyle=it.color; x.lineWidth=2.5;
+    x.beginPath(); x.moveTo(bx,by); x.lineTo(bx+16,by); x.stroke();
+    x.fillStyle='#1b1b1d'; x.textAlign='left';
+    x.fillText(it.label, bx+20, by);
+    p.legendBoxes.push({i:k, x0:bx-3, x1:bx+colW-6, y0:by-7, y1:by+7});
+  });
+  x.restore();
+}
+function legendHit(p, px, py){
+  for (const b of (p.legendBoxes || []))
+    if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return b.i;
+  return null;
+}
+
+function fitY(series){
+  let lo=Infinity, hi=-Infinity;
+  for (const {m,se} of series) for (let b=0;b<NB;b++){
+    lo = Math.min(lo, m[b]-se[b]); hi = Math.max(hi, m[b]+se[b]);
+  }
+  if (!(hi>lo)){ lo-=1; hi+=1; }
+  const span = hi-lo;
+  return [Math.min(lo-0.06*span, lo), hi+0.24*span];
+}
+
+const STIM_SHADE = 'rgba(120,125,132,.10)';
+
+function drawSummary(){
+  const p = P.sum;
+  p.clear();
+  const [y0,y1] = fitY(POP);
+  p.limits(TC[0], TC[NB-1], y0, y1);
+  p.vspan(0, H.stimDuration, STIM_SHADE);
+  p.frame({xlabel:'time from stimulus onset (s)', ylabel:VALUE_LABEL,
+           title:`${STAT_LABEL} across all ${NU} units `
+                 + `(shading: ±${SPREAD_LABEL} across units)`});
+  p.vline(0, '#999', 1);
+  if (y0 < 0) p.hline(0, '#ccc', 1);
+  const sel = state ? state.cond : null;
+  for (let c=0;c<NC;c++){
+    if (c === sel) continue;                     // draw the selected one last
+    const lo=[], up=[];
+    for (let b=0;b<NB;b++){ lo.push(POP[c].m[b]-POP[c].se[b]); up.push(POP[c].m[b]+POP[c].se[b]); }
+    p.band(TCA, lo, up, CC[c], sel === null ? 0.35 : 0.12);
+    p.line(TCA, Array.from(POP[c].m), CC[c], sel === null ? 1.8 : 1.0);
+  }
+  if (sel !== null){
+    const lo=[], up=[];
+    for (let b=0;b<NB;b++){ lo.push(POP[sel].m[b]-POP[sel].se[b]); up.push(POP[sel].m[b]+POP[sel].se[b]); }
+    p.band(TCA, lo, up, CC[sel], 0.45);
+    p.line(TCA, Array.from(POP[sel].m), CC[sel], 2.6);
+  }
+  legend(p, H.condNames.map((n,c)=>({label:n, color:CC[c]})), 2);
+}
+
+function drawMatrix(){
+  const p = P.mat, c = state.cond;
+  p.clear();
+  if (c === null){ p.placeholder('click a trace in the panel to the left'); return; }
+  const vals = new Float64Array(NU*NB);
+  let vmin = Infinity;
+  for (let i=0;i<NU;i++) for (let b=0;b<NB;b++){
+    const v = PSTH[(i*NC + c)*NB + b];
+    vals[i*NB+b] = v;
+    if (v < vmin) vmin = v;
+  }
+  const diverging = vmin < -1e-9;
+  let lo, hi, LUT;
+  if (diverging){
+    const mag = Float64Array.from(vals, Math.abs).sort();
+    hi = mag[Math.floor(0.995*(mag.length-1))]; lo = -hi; LUT = RDBU;
+  } else {
+    const srt = Float64Array.from(vals).sort();
+    lo = 0; hi = srt[Math.floor(0.99*(srt.length-1))]; LUT = MAGMA;
+  }
+  const span = (hi-lo) || 1;
+  p.limits(TC[0], TC[NB-1], NU-0.5, -0.5);
+  p.image((buf,w,h)=>{
+    for (let py=0;py<h;py++){
+      const i = Math.min(NU-1, Math.max(0, Math.floor(py/h*NU)));
+      for (let px=0;px<w;px++){
+        const b = Math.min(NB-1, Math.max(0, Math.floor(px/w*NB)));
+        let f = (PSTH[(i*NC+c)*NB+b]-lo)/span;
+        f = f<0?0:f>1?1:f;
+        const q = Math.round(f*255)*3, o = (py*w+px)*4;
+        buf[o]=LUT[q]; buf[o+1]=LUT[q+1]; buf[o+2]=LUT[q+2]; buf[o+3]=255;
+      }
+    }
+  });
+  p.frame({xlabel:'time from stimulus onset (s)',
+           ylabel:'unit # (sorted by depth)',
+           title:`${H.condNames[c]}: every unit behind that average\n`
+                 + `(${NU} units, ${TRIALS_OF[c].length} trials each)`,
+           titleColor:CC[c]});
+  p.vline(0, 'rgba(255,255,255,.6)', 1);
+  p.vline(H.stimDuration, 'rgba(255,255,255,.35)', 1);
+  p.colorbar(lo, hi, LUT, VALUE_LABEL);
+  CAP.mat.textContent = 'Click a row to see that unit. Rows are ordered by '
+    + 'depth on the probe, not by response — sorting by response would '
+    + 'manufacture a diagonal.';
+}
+
+function drawUnit(){
+  const pr = P.ras, pp = P.psth, i = state.unit;
+  pr.clear(); pp.clear();
+  if (i === null){
+    pr.placeholder('click a row in the units × time panel');
+    pp.placeholder('');
+    CAP.ras.textContent = '';
+    return;
+  }
+  const rows = [], rowTrial = [], bounds = [];
+  let y = 0;
+  for (let c=0;c<NC;c++){
+    for (const j of TRIALS_OF[c]){ rows.push({t:spikes(i,j), y:y, color:CC[c]}); rowTrial.push(j); y++; }
+    bounds.push(y);
+  }
+  state.rowTrial = rowTrial;
+
+  pr.limits(-PRE, POST, rows.length-0.5, -0.5);
+  pr.vspan(0, H.stimDuration, STIM_SHADE);
+  pr.frame({xlabel:'time from stimulus onset (s)',
+            ylabel:'trial (grouped by direction)',
+            title:`Unit ${i} (id ${A.unitId[i]}): all ${NT} trials`});
+  pr.vline(0, '#999', 1);
+  pr.raster(rows, 0.5, 1);
+  const cx = pr.ctx;
+  cx.save(); cx.strokeStyle='#b8bcc2'; cx.lineWidth=1;
+  for (let k=0;k<bounds.length-1;k++){
+    const py = Math.round(pr.Y(bounds[k]-0.5))+0.5;
+    cx.beginPath(); cx.moveTo(pr.area.x0,py); cx.lineTo(pr.area.x1,py); cx.stroke();
+  }
+  cx.font='bold 10px Arial, sans-serif'; cx.textBaseline='middle'; cx.textAlign='right';
+  for (let c=0;c<NC;c++){
+    const lo = c===0?0:bounds[c-1];
+    cx.fillStyle = CC[c];
+    cx.fillText(H.condNames[c], pr.area.x1-4, pr.Y((lo+bounds[c]-1)/2));
+  }
+  cx.restore();
+  CAP.ras.textContent = 'Click a trial row to see every unit on that trial.';
+
+  const mm = [];
+  for (let c=0;c<NC;c++) mm.push(unitStat(i,c));
+  const [y0,y1] = fitY(mm);
+  pp.limits(-PRE, POST, y0, y1);
+  pp.vspan(0, H.stimDuration, STIM_SHADE);
+  pp.frame({xlabel:'time from stimulus onset (s)', ylabel:VALUE_LABEL,
+            title:`Unit ${i} ${CFG.stat} PSTHs by direction\n`
+                  + `(shading: ±${SPREAD_LABEL} across trials)`});
+  pp.vline(0, '#999', 1);
+  if (y0 < 0) pp.hline(0, '#ccc', 1);
+  for (let c=0;c<NC;c++){
+    const lo=[], up=[];
+    for (let b=0;b<NB;b++){ lo.push(mm[c].m[b]-mm[c].se[b]); up.push(mm[c].m[b]+mm[c].se[b]); }
+    pp.band(TCA, lo, up, CC[c], 0.3);
+    pp.line(TCA, Array.from(mm[c].m), CC[c], 1.8);
+  }
+  legend(pp, H.condNames.map((n,c)=>({label:n, color:CC[c]})), 2);
+}
+
+function drawTrial(){
+  const p = P.trial, j = state.trial;
+  p.clear();
+  if (j === null){
+    p.placeholder('click a trial row in the raster above');
+    CAP.trial.textContent = '';
+    return;
+  }
+  const c = A.cond[j];
+  const dlo = Math.min(...A.depth) - 15, dhi = Math.max(...A.depth) + 15;
+  const rows = [];
+  for (let i=0;i<NU;i++)
+    rows.push({t:spikes(i,j), y:A.depth[i],
+               color:(i === state.unit ? '#1b1b1d' : CC[c])});
+  p.limits(-PRE, POST, dlo, dhi);
+  p.vspan(0, H.stimDuration, STIM_SHADE);
+  p.frame({xlabel:'time from stimulus onset (s)', ylabel:'depth on probe (µm)',
+           title:`Trial ${j} (${H.condNames[c]}, `
+                 + `${A.tf[j]} Hz): all ${NU} units\n`
+                 + `black = unit ${state.unit}`,
+           titleColor:CC[c]});
+  p.vline(0, '#999', 1);
+  p.raster(rows, 3.0, 1.1);
+  let n = 0;
+  for (let i=0;i<NU;i++) n += A.spIdx[i*NT+j+1] - A.spIdx[i*NT+j];
+  CAP.trial.textContent = `${n} spikes from ${NU} units in this 3 s window. `
+    + 'The raw-voltage view that would sit beside this is not wired up yet.';
+}
+
+function redraw(){ drawSummary(); drawMatrix(); drawUnit(); drawTrial(); }
+
+/* ---------------------------------------------------------- interaction */
+function local(plot, ev){
+  const r = plot.c.getBoundingClientRect();
+  return [ev.clientX - r.left, ev.clientY - r.top];
+}
+function markClickable(){
+  document.getElementById('p-mat').classList.toggle('clickable', state.cond !== null);
+  document.getElementById('p-ras').classList.toggle('clickable', state.unit !== null);
+}
+
+function initPanels(){
+  P = {
+    sum:   new Plot(document.getElementById('c-sum')),
+    mat:   new Plot(document.getElementById('c-mat'), {r:74}),
+    ras:   new Plot(document.getElementById('c-ras'), {t:34}),
+    psth:  new Plot(document.getElementById('c-psth')),
+    trial: new Plot(document.getElementById('c-trial')),
+  };
+  CAP = {
+    mat: document.getElementById('cap-mat'),
+    ras: document.getElementById('cap-ras'),
+    trial: document.getElementById('cap-trial'),
+  };
+  state = {cond:null, unit:null, trial:null, rowTrial:null};
+
+  function pickCond(c){
+    state.cond = c; state.unit = null; state.trial = null;
+    drawSummary(); drawMatrix(); drawUnit(); drawTrial(); markClickable();
+  }
+
+  P.sum.c.addEventListener('click', ev => {
+    const p = P.sum, [px,py] = local(p, ev);
+    const lg = legendHit(p, px, py);
+    if (lg !== null){ pickCond(lg); return; }
+    if (!p.inside(px,py)) return;
+    const xd = p.invX(px), yd = p.invY(py);
+    let b = Math.round((xd + PRE)/BIN - 0.5);
+    b = Math.max(0, Math.min(NB-1, b));
+    let best=-1, bestD=Infinity;
+    for (let c=0;c<NC;c++){
+      const d = Math.abs(POP[c].m[b] - yd);
+      if (d < bestD){ bestD = d; best = c; }
+    }
+    if (bestD > 0.12*Math.abs(p.yl[1]-p.yl[0])) return;
+    pickCond(best);
+  });
+
+  P.mat.c.addEventListener('click', ev => {
+    if (state.cond === null) return;
+    const p = P.mat, [px,py] = local(p, ev);
+    if (!p.inside(px,py)) return;
+    const i = Math.round(p.invY(py));
+    if (i < 0 || i >= NU) return;
+    state.unit = i; state.trial = null;
+    drawUnit(); drawTrial(); markClickable();
+  });
+
+  P.ras.c.addEventListener('click', ev => {
+    if (state.unit === null) return;
+    const p = P.ras, [px,py] = local(p, ev);
+    if (!p.inside(px,py)) return;
+    const row = Math.round(p.invY(py));
+    if (row < 0 || row >= state.rowTrial.length) return;
+    state.trial = state.rowTrial[row];
+    drawTrial();
+  });
+
+  /* selectors */
+  const fill = (el, opts, v) => {
+    el.innerHTML = '';
+    for (const o of opts){
+      const opt = document.createElement('option');
+      opt.value = o; opt.textContent = o; el.appendChild(opt);
+    }
+    el.value = v;
+  };
+  const selTrial = document.getElementById('sel-trial');
+  const selNeuron = document.getElementById('sel-neuron');
+  const selStat = document.getElementById('sel-stat');
+  const floorNote = document.getElementById('floornote');
+  fill(selTrial, TRIAL_NORMS, CFG.trialNorm);
+  fill(selNeuron, NEURON_NORMS, CFG.neuronNorm);
+  fill(selStat, STATS, CFG.stat);
+  window.selTrial = selTrial; window.selNeuron = selNeuron;
+  window.selStat = selStat; window.floorNote = floorNote;
+
+  function updateFloorNote(){
+    const bits = [];
+    if (N_FLOORED) bits.push(`${N_FLOORED} of ${NU*NT} per-trial baselines`);
+    if (N_FLOORED_NEURONS) bits.push(`${N_FLOORED_NEURONS} of ${NU} per-unit baselines`);
+    floorNote.textContent = bits.length
+      ? 'divide-by-almost-zero floor applied to ' + bits.join(' and ')
+      : '';
+  }
+  window.updateFloorNote = updateFloorNote;
+
+  function onChange(){
+    CFG.trialNorm = selTrial.value;
+    CFG.neuronNorm = selNeuron.value;
+    CFG.stat = selStat.value;
+    for (const el of [selTrial,selNeuron,selStat]) el.disabled = true;
+    setTimeout(() => {
+      configure(); updateFloorNote(); redraw();
+      for (const el of [selTrial,selNeuron,selStat]) el.disabled = false;
+    }, 0);
+  }
+  for (const el of [selTrial,selNeuron,selStat])
+    el.addEventListener('change', onChange);
+
+  let rt = null;
+  const schedule = () => { clearTimeout(rt); rt = setTimeout(redraw, 80); };
+  new ResizeObserver(schedule).observe(document.querySelector('.grid'));
+  window.addEventListener('resize', schedule);
+
+  configure();
+  updateFloorNote();
+  redraw();
+  markClickable();
+}
+"""
+
+
+def main():
+    import base64
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    def lut(name):
+        a = (np.asarray(plt.get_cmap(name)(np.linspace(0, 1, 256)))[:, :3]
+             * 255).round().astype(np.uint8)
+        return base64.b64encode(a.tobytes()).decode()
+
+    html = (PAGE
+            .replace('__ANALYSIS__', ANALYSIS)
+            .replace('__PLOT__', PLOT)
+            .replace('__PANELS__', PANELS)
+            .replace('__MAGMA__', lut('magma'))
+            .replace('__RDBU__', lut('RdBu_r')))
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, 'w', encoding='utf-8') as f:
+        f.write(html)
+    print(f'wrote {OUT}  ({os.path.getsize(OUT)/1024:.0f} KB)')
+    d = os.path.join(HERE, 'web', 'data.bin')
+    if os.path.exists(d):
+        print(f'  alongside data.bin ({os.path.getsize(d)/1e6:.2f} MB)')
+
+
+if __name__ == '__main__':
+    main()

@@ -40,7 +40,8 @@ Things you run and click rather than read.
 
 | Folder | What it does |
 |--------|--------------|
-| [`plotting_drilldown_demo/`](plotting_drilldown_demo) | Starts from the figure everyone publishes — three average PSTHs, mean ± SEM across neurons — and lets you click down through the neurons × time matrix, one neuron's trials, and one trial, to the raw voltage on the probe with a dot on every spike. Makes the distance between the published trace and the recorded data clickable. Comes in three forms: a standalone script, a Jupyter notebook, and **[a live web page](https://drilldown-psth-to-voltage.netlify.app)** that needs no install. |
+| [`plotting_drilldown_demo/`](plotting_drilldown_demo) | Starts from the figure everyone publishes — three average PSTHs, mean ± SEM across neurons — and lets you click down through the neurons × time matrix, one neuron's trials, and one trial, to the raw voltage on the probe with a dot on every spike. Makes the distance between the published trace and the recorded data clickable. Comes in three forms: a standalone script, a Jupyter notebook, and **[a live web page](https://drilldown-psth-to-voltage.netlify.app)** that needs no install. Synthetic data. |
+| [`allen_drilldown/`](allen_drilldown) | The same drill-down over **real Allen Institute Visual Coding – Neuropixels data**: 110 V1 units, drifting gratings at 8 directions. The population average is nearly flat, yet 74 of the 110 units are strongly orientation-tuned — they just prefer different orientations, so averaging cancels it. **[Live page](https://allen-v1-orientation-drilldown.netlify.app)**. |
 
 ## How each exercise is organized
 
