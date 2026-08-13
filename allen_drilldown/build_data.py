@@ -31,7 +31,7 @@ PROBE_ID = 733744649
 PROBE_NAME = 'probeC'
 STRUCTURE = 'VISp'
 
-PRE, POST = 0.5, 2.5          # s around stimulus onset
+PRE, POST = 1.0, 3.0          # s around onset = one full 3 s stimulus cycle
 BIN = 0.025                   # s, PSTH bin width used by the page
 N_BINS = int(round((PRE + POST) / BIN))
 
@@ -62,6 +62,7 @@ def main():
                        for s in el['location'][:]])
     el_y = el['probe_vertical_position'][:].astype(float)
     el_x = el['probe_horizontal_position'][:].astype(float)
+    el_local = el['local_index'][:].astype(int)
     by_el = {int(i): k for k, i in enumerate(el_id)}
 
     u = f['units']
@@ -96,6 +97,7 @@ def main():
     # Sort units by depth so level 1 and level 3 share a sensible order.
     order = np.argsort(depth, kind='stable')
     keep, depth, xpos, e_idx = keep[order], depth[order], xpos[order], e_idx[order]
+    unit_col = el_local[e_idx].astype(int)   # file column == local_index
     n_units = len(keep)
 
     st_vals, st_start, st_end = ragged(f, 'spike_times')
@@ -147,6 +149,9 @@ def main():
         ('spIdx',  bounds),
         ('depth',  depth.astype(np.float32)),
         ('xpos',   xpos.astype(np.float32)),
+        # peak channel == column in spike_band.dat; needed to line the
+        # voltage dots up with the right one of each depth pair
+        ('unitCol', unit_col.astype(np.uint16)),
         ('unitId', u_id[keep].astype(np.uint32)),
         ('firing', fr[keep].astype(np.float32)),
         ('snr',    snr[keep].astype(np.float32)),

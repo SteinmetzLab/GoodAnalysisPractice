@@ -5,12 +5,13 @@ Neuropixels data.
 The page fetches web/data.bin (written by build_data.py), bins and smooths the
 PSTHs in the browser, and draws everything on <canvas>. No libraries.
 
-Levels 0-2 plus the trial raster of level 3; the raw-voltage panel is not wired
-up yet (see ../plotting_drilldown_demo/REAL_DATA_PLAN.md).
+All four levels, including raw voltage: web/volt.bin holds 40 pre-extracted
+snippets and the page range-requests one slice per trial.
 
 Run:  python build_html.py
 """
 
+import hashlib
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -93,6 +94,11 @@ PAGE = r"""<!doctype html>
   footer code{
     background:#eceff3; padding:1px 5px; border-radius:4px; font-size:12px;
   }
+  #btn-volt{
+    font:12px Arial, sans-serif; padding:4px 10px; border-radius:6px;
+    border:1px solid #c9ced6; background:#fff; color:#0060b0; cursor:pointer;
+  }
+  #btn-volt:hover{background:#f0f4f9}
   kbd{
     background:#fff; border:1px solid #c9ced6; border-bottom-width:2px;
     border-radius:4px; padding:0 5px; font:12px/1.5 inherit;
@@ -148,7 +154,11 @@ PAGE = r"""<!doctype html>
   <div class="panel" id="p-psth"><canvas id="c-psth"></canvas>
     <p class="cap"></p></div>
   <div class="panel wide" id="p-trial"><canvas id="c-trial"></canvas>
-    <p class="cap" id="cap-trial"></p></div>
+    <p class="cap" id="cap-trial"></p>
+    <p class="cap"><button id="btn-volt" type="button">jump to a trial with
+      raw voltage</button></p></div>
+  <div class="panel wide" id="p-volt"><canvas id="c-volt"></canvas>
+    <p class="cap" id="cap-volt"></p></div>
 </div>
 </div>
 
@@ -170,16 +180,32 @@ PAGE = r"""<!doctype html>
   ratio &gt; 0.95, ISI violations &lt; 0.5. That filter is a scientific choice,
   and the population average at the top depends on it.</p>
 
-  <h3>Not here yet</h3>
-  <p>The deepest level of this drill-down &mdash; the raw voltage on the probe
-  with a coloured dot on every spike &mdash; is not wired up. Allen does
-  publish the continuous spike-band traces, but their S3 bucket sends no CORS
-  header, so a web page cannot read it directly; the snippets have to be
-  pre-extracted and hosted alongside this page. Level 3 below currently shows
-  only the all-neuron raster for the trial you picked.</p>
+  <h3>Where the raw voltage comes from</h3>
+  <p>The bottom panel is genuine 30&nbsp;kHz voltage from the probe, not a
+  reconstruction. Allen's <code>spike_band.dat</code> for this probe is
+  <b>217&nbsp;GB</b>, and their S3 bucket sends no CORS header, so a browser
+  can neither stream nor read it. But the file is flat channel-interleaved
+  int16, so a time window is contiguous bytes: 40 windows &mdash; one per
+  direction&nbsp;&times;&nbsp;temporal frequency &mdash; were pulled with
+  ranged GETs from Python, high-pass filtered at 300&nbsp;Hz for display,
+  common-average-referenced, quantised to int8 and
+  stored next to this page as a 22&nbsp;MB file. The page then fetches
+  <b>one 0.5&nbsp;MB slice per trial</b> with its own ranged GET, so nothing
+  downloads until you ask for it. Rows marked &#9656; in the trial raster have
+  a snippet.</p>
+
+  <p>Getting the two clocks to agree was the fiddly part. The probe samples and
+  the NWB spike times live on different clocks, related through barcode pulses
+  recorded on both; matching those gives a map good to a few tens of
+  microseconds. As a check, every unit's spike-triggered average shows a sharp
+  trough on its own peak channel &mdash; and it sits a constant 0.77&nbsp;ms
+  after the stored spike time, because Kilosort timestamps the start of its
+  template window rather than the trough. The dots are shifted by that amount
+  so they land on the waveforms.</p>
 
   <p>A <a href="https://drilldown-psth-to-voltage.netlify.app">synthetic-data
-  version</a> of the same drill-down does include the voltage level. Code for
+  version</a> of the same drill-down lets you compare: there the dots really
+  are ground truth, because the waveforms were put there on purpose. Code for
   both is in the
   <a href="https://github.com/SteinmetzLab/GoodAnalysisPractice">Good Analysis
   Practice</a> repository.</p>
@@ -192,12 +218,12 @@ PAGE = r"""<!doctype html>
 const TYPES = {uint8:Uint8Array, uint16:Uint16Array, uint32:Uint32Array,
                int32:Int32Array, float32:Float32Array, float64:Float64Array};
 
-let H, A, NU, NT, NC, NB, PRE, POST, BIN, QUANT, TC, TCA, CC;
+let H, A, NU, NT, NC, NB, PRE, POST, BIN, QUANT, TC, TCA, CC, UCOL;
 let TRIALS_OF, RATES, BASE_N;
 
 /* ---------------------------------------------------------------- loading */
 async function load(){
-  const raw = await (await fetch('data.bin', {cache:'force-cache'})).arrayBuffer();
+  const raw = await (await fetch('__DATA_URL__')).arrayBuffer();
   const dv = new DataView(raw);
   const hlen = dv.getUint32(0, true);
   H = JSON.parse(new TextDecoder().decode(new Uint8Array(raw, 4, hlen)));
@@ -217,6 +243,18 @@ async function load(){
   // the two lobes of an orientation-tuned cell easy to tell apart.
   CC = [];
   for (let c = 0; c < NC; c++) CC.push(`hsl(${Math.round(c / NC * 360)},68%,42%)`);
+
+  // A distinct colour per unit for level 3, shuffled so that units at
+  // neighbouring depths do not come out nearly the same hue.
+  UCOL = new Array(NU);
+  {
+    const idx = Array.from({length:NU}, (_,i)=>i);
+    const rng = mulberry32(7);
+    for (let i = NU-1; i > 0; i--){ const k = (rng()*(i+1))|0;
+      [idx[i], idx[k]] = [idx[k], idx[i]]; }
+    for (let i = 0; i < NU; i++)
+      UCOL[i] = `hsl(${Math.round(idx[i]/NU*360)},72%,45%)`;
+  }
 
   TRIALS_OF = [];
   for (let c = 0; c < NC; c++) TRIALS_OF.push([]);
@@ -286,6 +324,12 @@ load().then(() => {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('app').style.display = '';
   initPanels();
+  // initPanels draws immediately, but the grid it lives in was display:none a
+  // moment ago, so the canvases can still measure zero. Redraw once layout has
+  // actually happened. Two rAFs is the reliable point for that; the timeout is
+  // a belt-and-braces fallback for contexts where rAF is throttled.
+  requestAnimationFrame(() => requestAnimationFrame(redraw));
+  setTimeout(redraw, 250);
 }).catch(err => {
   document.getElementById('loading').textContent = 'failed to load data.bin: ' + err;
   console.error(err);
@@ -546,6 +590,12 @@ class Plot {
   invX(px){ const a=this.area; return this.xl[0] + (px-a.x0)/(a.x1-a.x0)*(this.xl[1]-this.xl[0]); }
   invY(py){ const a=this.area; return this.yl[0] + (a.y1-py)/(a.y1-a.y0)*(this.yl[1]-this.yl[0]); }
   inside(px,py){ const a=this.area; return px>=a.x0 && px<=a.x1 && py>=a.y0 && py<=a.y1; }
+  /** npx screen pixels expressed in data units on the y axis, so raster ticks
+   *  can be sized in pixels no matter how many rows are packed in. */
+  pxY(npx){
+    const a = this.area;
+    return Math.abs(this.yl[1]-this.yl[0]) * npx / (a.y1 - a.y0);
+  }
   clear(){ this.resize(); this.ctx.clearRect(0,0,this.w,this.h); }
   placeholder(text){
     this.clear();
@@ -655,6 +705,17 @@ class Plot {
         x.moveTo(px,y0); x.lineTo(px,y1);
       }
       x.stroke();
+    }
+    x.restore();
+  }
+  dots(pts, radius, stroke, lw){
+    this.clip();
+    const x = this.ctx;
+    x.lineWidth = lw || 1; x.strokeStyle = stroke || '#fff';
+    for (const p of pts){
+      x.fillStyle = p.color;
+      x.beginPath(); x.arc(this.X(p.x), this.Y(p.y), radius, 0, 6.2832);
+      x.fill(); x.stroke();
     }
     x.restore();
   }
@@ -825,10 +886,19 @@ function drawUnit(){
     CAP.ras.textContent = '';
     return;
   }
-  const rows = [], rowTrial = [], bounds = [];
+  // Within each direction, order trials by temporal frequency, so the
+  // phase-locking to the drifting grating lines up into bands.
+  const rows = [], rowTrial = [], bounds = [], tfBounds = [];
   let y = 0;
   for (let c=0;c<NC;c++){
-    for (const j of TRIALS_OF[c]){ rows.push({t:spikes(i,j), y:y, color:CC[c]}); rowTrial.push(j); y++; }
+    const tr = TRIALS_OF[c].slice().sort((p,q) => (A.tf[p]-A.tf[q]) || (p-q));
+    let prevTf = null;
+    for (const j of tr){
+      if (prevTf !== null && A.tf[j] !== prevTf) tfBounds.push(y);
+      prevTf = A.tf[j];
+      rows.push({t:spikes(i,j), y:y, color:CC[c]});
+      rowTrial.push(j); y++;
+    }
     bounds.push(y);
   }
   state.rowTrial = rowTrial;
@@ -836,13 +906,21 @@ function drawUnit(){
   pr.limits(-PRE, POST, rows.length-0.5, -0.5);
   pr.vspan(0, H.stimDuration, STIM_SHADE);
   pr.frame({xlabel:'time from stimulus onset (s)',
-            ylabel:'trial (grouped by direction)',
+            ylabel:'trial (direction, then temporal frequency)',
             title:`Unit ${i} (id ${A.unitId[i]}): all ${NT} trials`});
   pr.vline(0, '#999', 1);
-  pr.raster(rows, 0.5, 1);
+  // Ticks sized in screen pixels: with ~600 rows in ~250 px a one-row-tall
+  // tick is invisible for a low-rate unit.
+  pr.raster(rows, pr.pxY(3.5)/2, 2);
   const cx = pr.ctx;
-  cx.save(); cx.strokeStyle='#b8bcc2'; cx.lineWidth=1;
-  for (let k=0;k<bounds.length-1;k++){
+  cx.save();
+  cx.strokeStyle='rgba(150,155,162,.45)'; cx.lineWidth=1;
+  for (const b of tfBounds){                       // faint: temporal frequency
+    const py = Math.round(pr.Y(b-0.5))+0.5;
+    cx.beginPath(); cx.moveTo(pr.area.x0,py); cx.lineTo(pr.area.x1,py); cx.stroke();
+  }
+  cx.strokeStyle='#7d838b'; cx.lineWidth=1.4;
+  for (let k=0;k<bounds.length-1;k++){             // solid: direction
     const py = Math.round(pr.Y(bounds[k]-0.5))+0.5;
     cx.beginPath(); cx.moveTo(pr.area.x0,py); cx.lineTo(pr.area.x1,py); cx.stroke();
   }
@@ -852,8 +930,17 @@ function drawUnit(){
     cx.fillStyle = CC[c];
     cx.fillText(H.condNames[c], pr.area.x1-4, pr.Y((lo+bounds[c]-1)/2));
   }
+  // Flag the rows that have a pre-extracted raw-voltage snippet.
+  if (VH){
+    cx.fillStyle = '#0060b0';
+    for (let r = 0; r < rowTrial.length; r++)
+      if (VH.trialSet.has(rowTrial[r]))
+        cx.fillRect(pr.area.x0 - 8, pr.Y(r) - 1.5, 6, 3);
+  }
   cx.restore();
-  CAP.ras.textContent = 'Click a trial row to see every unit on that trial.';
+  CAP.ras.textContent = 'Click a trial row to see every unit on that trial. '
+    + 'Within each direction, trials run from 1 Hz at the top to 15 Hz at the '
+    + 'bottom (faint lines). Rows marked ▸ also have raw voltage.';
 
   const mm = [];
   for (let c=0;c<NC;c++) mm.push(unitStat(i,c));
@@ -884,26 +971,220 @@ function drawTrial(){
   }
   const c = A.cond[j];
   const dlo = Math.min(...A.depth) - 15, dhi = Math.max(...A.depth) + 15;
-  const rows = [];
-  for (let i=0;i<NU;i++)
-    rows.push({t:spikes(i,j), y:A.depth[i],
-               color:(i === state.unit ? '#1b1b1d' : CC[c])});
   p.limits(-PRE, POST, dlo, dhi);
   p.vspan(0, H.stimDuration, STIM_SHADE);
+  // Highlight band behind the selected unit's row. Black spikes on top of the
+  // condition colour were far too easy to lose, so the selected unit gets a
+  // band, taller ticks and a heavier stroke.
+  const sel = state.unit;
+  if (sel !== null){
+    const hh = p.pxY(11) / 2;
+    p.clip();
+    p.ctx.fillStyle = 'rgba(255,214,0,.30)';
+    p.ctx.fillRect(p.area.x0, p.Y(A.depth[sel] + hh),
+                   p.area.x1 - p.area.x0,
+                   Math.abs(p.Y(A.depth[sel]-hh) - p.Y(A.depth[sel]+hh)));
+    p.ctx.restore();
+  }
   p.frame({xlabel:'time from stimulus onset (s)', ylabel:'depth on probe (µm)',
            title:`Trial ${j} (${H.condNames[c]}, `
                  + `${A.tf[j]} Hz): all ${NU} units\n`
-                 + `black = unit ${state.unit}`,
+                 + `highlighted row = unit ${sel}`,
            titleColor:CC[c]});
+  if (VH && VH.trialSet.has(j)) p.vspan(VH.win[0], VH.win[1], 'rgba(0,90,180,.13)');
   p.vline(0, '#999', 1);
-  p.raster(rows, 3.0, 1.1);
+  const others = [], mine = [];
+  for (let i=0;i<NU;i++)
+    (i === sel ? mine : others).push({t:spikes(i,j), y:A.depth[i],
+                                      color:UCOL[i]});
+  p.raster(others, p.pxY(4)/2, 1.4);
+  if (mine.length){                      // drawn last, so it sits on top
+    mine[0].color = '#111';
+    p.raster(mine, p.pxY(13)/2, 3);
+  }
   let n = 0;
   for (let i=0;i<NU;i++) n += A.spIdx[i*NT+j+1] - A.spIdx[i*NT+j];
   CAP.trial.textContent = `${n} spikes from ${NU} units in this 3 s window. `
     + 'The raw-voltage view that would sit beside this is not wired up yet.';
 }
 
-function redraw(){ drawSummary(); drawMatrix(); drawUnit(); drawTrial(); }
+/* ------------------------------------------------- level 3: raw voltage
+ * Allen's 217 GB spike_band.dat cannot be read from a browser (no CORS), so
+ * 40 trials -- one per direction x temporal frequency -- were pre-extracted
+ * and are served next to this page as volt.bin. The header comes down in one
+ * small ranged GET and each trial in another, so nothing loads until asked.
+ */
+const VOLT_URL = '__VOLT_URL__';
+let VH = null, VBUF = new Map(), VPEND = null, VZOOM = null;
+
+/** Ranged GET that survives a server which ignores Range.
+ *  Python's http.server answers 200 with the whole file, and indexing a block
+ *  offset into that returns the file header instead of the data -- which looks
+ *  like plausible noise rather than an error. Detect it and slice locally,
+ *  keeping the full buffer so we only pay for it once. */
+let VFULL = null;
+async function rangeFetch(url, start, end){
+  if (VFULL) return VFULL.slice(start, end + 1);
+  const r = await fetch(url, {headers:{Range:`bytes=${start}-${end}`}});
+  const buf = await r.arrayBuffer();
+  const want = end - start + 1;
+  if (r.status === 206 && buf.byteLength === want) return buf;
+  if (buf.byteLength > want){          // Range ignored: whole file came back
+    VFULL = buf;
+    return buf.slice(start, end + 1);
+  }
+  throw new Error(`range ${start}-${end}: got ${buf.byteLength} bytes, `
+                  + `status ${r.status}`);
+}
+
+async function ensureVoltHeader(){
+  if (VH) return VH;
+  const buf = await rangeFetch(VOLT_URL, 0, 16383);
+  const hlen = new DataView(buf).getUint32(0, true);
+  if (hlen + 4 > buf.byteLength) throw new Error('volt.bin header too large');
+  VH = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hlen)));
+  VH.trialSet = new Set(VH.trials);
+  // channels sorted by depth, for the image's y axis
+  VH.order = VH.colDepth.map((d,i)=>[d,i]).filter(p=>p[0]!==null)
+                        .sort((a,b)=>a[0]-b[0]);
+  VH.sortedDepth = VH.order.map(p=>p[0]);
+  VH.sortedCol = VH.order.map(p=>p[1]);
+  // Distinct depths, each with the list of channels sitting at it.
+  VH.depths = [];
+  VH.atDepth = [];
+  for (const [d, i] of VH.order){
+    const k = VH.depths.length - 1;
+    if (k >= 0 && Math.abs(VH.depths[k] - d) < 1) VH.atDepth[k].push(i);
+    else { VH.depths.push(d); VH.atDepth.push([i]); }
+  }
+  return VH;
+}
+
+async function loadVoltTrial(j){
+  await ensureVoltHeader();
+  if (!VH.trialSet.has(j)) return null;
+  if (VBUF.has(j)) return VBUF.get(j);
+  const off = VH.offsets[String(j)], len = VH.blockBytes;
+  const a = new Int8Array(await rangeFetch(VOLT_URL, off, off + len - 1));
+  if (a.length !== len) throw new Error('bad read from volt.bin: ' + a.length);
+  if (VBUF.size > 5) VBUF.delete(VBUF.keys().next().value);
+  VBUF.set(j, a);
+  return a;
+}
+
+const VOLT_CLIM = 55;                  // uV, grey scale (post high-pass)
+
+function drawVolt(){
+  const p = P.volt, j = state.trial;
+  p.clear();
+  if (j === null){
+    p.placeholder('pick a trial above to see the raw voltage');
+    CAP.volt.textContent = '';
+    return;
+  }
+  if (!VH || !VH.trialSet.has(j)){
+    const known = VH ? '' : ' (loading index…)';
+    p.placeholder(VH
+      ? 'no voltage snippet stored for this trial — rows marked ▸ in the '
+        + 'raster above have one'
+      : 'loading…' + known);
+    CAP.volt.textContent = VH
+      ? `Snippets exist for ${VH.trials.length} of ${NT} trials, one per `
+        + 'direction × temporal frequency.' : '';
+    return;
+  }
+  const a = VBUF.get(j);
+  if (!a){
+    p.placeholder('fetching 0.5 MB of raw voltage…');
+    return;
+  }
+
+  const nS = VH.nSamples, nC = VH.nChannels;
+  const [x0, x1] = VZOOM || VH.win;
+  const dep = VH.sortedDepth;
+  const dlo = dep[0] - 10, dhi = dep[dep.length-1] + 10;
+  p.limits(x0, x1, dlo, dhi);
+  const scale = VH.uvFullScale / 127;
+
+  p.image((buf, w, h) => {
+    // per output column, mean over the samples that fall in it
+    const col = new Float32Array(nC * w);
+    const f0 = (x0 - VH.win[0]) / (VH.win[1] - VH.win[0]);
+    const f1 = (x1 - VH.win[0]) / (VH.win[1] - VH.win[0]);
+    for (let px = 0; px < w; px++){
+      let s0 = Math.floor((f0 + (f1-f0)*px/w) * nS);
+      let s1 = Math.ceil((f0 + (f1-f0)*(px+1)/w) * nS);
+      if (s1 <= s0) s1 = s0 + 1;
+      if (s0 < 0) s0 = 0;
+      if (s1 > nS) s1 = nS;
+      if (s1 <= s0) continue;
+      const n = s1 - s0;
+      for (let c = 0; c < nC; c++){
+        let acc = 0;
+        const row = c * nS;
+        for (let k = s0; k < s1; k++) acc += a[row + k];
+        col[c * w + px] = acc / n * scale;
+      }
+    }
+    for (let py = 0; py < h; py++){
+      const d = dhi - (py + 0.5) / h * (dhi - dlo);
+      let k = 0, best = Infinity;
+      for (let q = 0; q < VH.depths.length; q++){
+        const e = Math.abs(VH.depths[q] - d);
+        if (e < best){ best = e; k = q; }
+      }
+      const chans = VH.atDepth[k], nch = chans.length;
+      for (let px = 0; px < w; px++){
+        let v = 0;
+        for (let m = 0; m < nch; m++) v += col[chans[m] * w + px];
+        let g = (v / nch + VOLT_CLIM) / (2 * VOLT_CLIM) * 255;
+        g = g < 0 ? 0 : g > 255 ? 255 : g;
+        const o = (py * w + px) * 4;
+        buf[o] = buf[o+1] = buf[o+2] = g; buf[o+3] = 255;
+      }
+    }
+  });
+  p.frame({xlabel:'time from stimulus onset (s)', ylabel:'depth on probe (µm)',
+           title:`Raw voltage, ${nC} channels at 30 kHz `
+                 + `(${VH.hpHz|0} Hz high-pass, ±${VOLT_CLIM} µV grey scale)\n`
+                 + 'sites at the same depth averaged; dots = sorted spikes, by unit',
+           titleColor:'#1b1b1d'});
+  p.vline(0, 'rgba(255,255,255,.55)', 1);
+
+  // Dots at the sorted spike times, shifted by the measured template lag so
+  // they sit on the troughs rather than beside them.
+  const lag = (VH.spikeLagMs || 0) / 1000;
+  const pts = [], selPts = [];
+  for (let i = 0; i < NU; i++){
+    const t = spikes(i, j);
+    for (let k = 0; k < t.length; k++){
+      const tt = t[k] + lag;
+      if (tt >= x0 && tt <= x1)
+        (i === state.unit ? selPts : pts).push({x:tt, y:A.depth[i],
+                                                color:UCOL[i]});
+    }
+  }
+  p.dots(pts, 3.5, '#fff', 1);
+  if (selPts.length) p.dots(selPts, 6, '#111', 2);
+  CAP.volt.textContent =
+    `${pts.length + selPts.length} spikes in this ${((x1-x0)*1000)|0} ms `
+    + 'window. Scroll to zoom. Dots are shifted '
+    + `${(VH.spikeLagMs||0).toFixed(2)} ms from the stored spike times — `
+    + 'Kilosort timestamps the template window, not the trough.';
+}
+
+function requestVolt(){
+  const j = state.trial;
+  if (j === null) return;
+  VPEND = j;
+  loadVoltTrial(j).then(() => { if (VPEND === j) drawVolt(); })
+                  .catch(err => {
+                    console.error(err);
+                    P.volt.placeholder('could not load volt.bin: ' + err.message);
+                  });
+}
+
+function redraw(){ drawSummary(); drawMatrix(); drawUnit(); drawTrial(); drawVolt(); }
 
 /* ---------------------------------------------------------- interaction */
 function local(plot, ev){
@@ -922,11 +1203,13 @@ function initPanels(){
     ras:   new Plot(document.getElementById('c-ras'), {t:34}),
     psth:  new Plot(document.getElementById('c-psth')),
     trial: new Plot(document.getElementById('c-trial')),
+    volt:  new Plot(document.getElementById('c-volt')),
   };
   CAP = {
     mat: document.getElementById('cap-mat'),
     ras: document.getElementById('cap-ras'),
     trial: document.getElementById('cap-trial'),
+    volt: document.getElementById('cap-volt'),
   };
   state = {cond:null, unit:null, trial:null, rowTrial:null};
 
@@ -969,8 +1252,40 @@ function initPanels(){
     const row = Math.round(p.invY(py));
     if (row < 0 || row >= state.rowTrial.length) return;
     state.trial = state.rowTrial[row];
-    drawTrial();
+    VZOOM = null;
+    drawTrial(); drawVolt(); requestVolt();
   });
+
+  document.getElementById('btn-volt').addEventListener('click', async () => {
+    await ensureVoltHeader();
+    if (state.unit === null){
+      CAP.volt.textContent = 'pick a direction and a unit first';
+      return;
+    }
+    // prefer a snippet trial in the direction currently being viewed
+    let pick = VH.trials.find(j => A.cond[j] === state.cond);
+    if (pick === undefined) pick = VH.trials[0];
+    state.trial = pick;
+    VZOOM = null;
+    drawUnit(); drawTrial(); drawVolt(); requestVolt();
+  });
+
+  // Scroll to zoom the voltage panel, anchored under the pointer.
+  P.volt.c.addEventListener('wheel', ev => {
+    if (state.trial === null || !VH || !VH.trialSet.has(state.trial)) return;
+    ev.preventDefault();
+    const p = P.volt, [px] = local(p, ev);
+    if (!p.xl) return;
+    const anchor = p.invX(px), f = ev.deltaY > 0 ? 1.25 : 0.8;
+    let [a, b] = p.xl;
+    let w = Math.min(VH.win[1]-VH.win[0], Math.max(0.004, (b-a)*f));
+    const frac = (anchor - a) / (b - a);
+    let na = anchor - frac*w, nb = anchor + (1-frac)*w;
+    if (na < VH.win[0]){ nb += VH.win[0]-na; na = VH.win[0]; }
+    if (nb > VH.win[1]){ na -= nb-VH.win[1]; nb = VH.win[1]; }
+    VZOOM = [Math.max(VH.win[0], na), Math.min(VH.win[1], nb)];
+    drawVolt();
+  }, {passive:false});
 
   /* selectors */
   const fill = (el, opts, v) => {
@@ -1037,10 +1352,21 @@ def main():
              * 255).round().astype(np.uint8)
         return base64.b64encode(a.tobytes()).decode()
 
+    def tag(name):
+        f = os.path.join(HERE, 'web', name)
+        if not os.path.exists(f):
+            return name
+        h = hashlib.sha1(open(f, 'rb').read()).hexdigest()[:10]
+        return f'{name}?v={h}'
+
+    # Section splicing first: __VOLT_URL__ lives inside PANELS, so the URL
+    # substitutions have to run after the sections are in place.
     html = (PAGE
             .replace('__ANALYSIS__', ANALYSIS)
             .replace('__PLOT__', PLOT)
             .replace('__PANELS__', PANELS)
+            .replace('__VOLT_URL__', tag('volt.bin'))
+            .replace('__DATA_URL__', tag('data.bin'))
             .replace('__MAGMA__', lut('magma'))
             .replace('__RDBU__', lut('RdBu_r')))
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
