@@ -94,11 +94,12 @@ PAGE = r"""<!doctype html>
   footer code{
     background:#eceff3; padding:1px 5px; border-radius:4px; font-size:12px;
   }
-  #btn-volt{
+  #btn-volt, #btn-prev, #btn-next, #btn-rand{
     font:12px Arial, sans-serif; padding:4px 10px; border-radius:6px;
     border:1px solid #c9ced6; background:#fff; color:#0060b0; cursor:pointer;
   }
-  #btn-volt:hover{background:#f0f4f9}
+  #btn-prev:hover, #btn-next:hover, #btn-rand:hover{background:#f0f4f9}
+  #trial-label{margin-left:8px}
   kbd{
     background:#fff; border:1px solid #c9ced6; border-bottom-width:2px;
     border-radius:4px; padding:0 5px; font:12px/1.5 inherit;
@@ -155,8 +156,10 @@ PAGE = r"""<!doctype html>
     <p class="cap"></p></div>
   <div class="panel wide" id="p-trial"><canvas id="c-trial"></canvas>
     <p class="cap" id="cap-trial"></p>
-    <p class="cap"><button id="btn-volt" type="button">jump to a trial with
-      raw voltage</button></p></div>
+    <p class="cap"><button id="btn-prev" type="button">&#9664; previous trial</button>
+      <button id="btn-next" type="button">next trial &#9654;</button>
+      <button id="btn-rand" type="button">random trial</button>
+      <span id="trial-label"></span></p></div>
   <div class="panel wide" id="p-volt"><canvas id="c-volt"></canvas>
     <p class="cap" id="cap-volt"></p></div>
 </div>
@@ -930,17 +933,10 @@ function drawUnit(){
     cx.fillStyle = CC[c];
     cx.fillText(H.condNames[c], pr.area.x1-4, pr.Y((lo+bounds[c]-1)/2));
   }
-  // Flag the rows that have a pre-extracted raw-voltage snippet.
-  if (VH){
-    cx.fillStyle = '#0060b0';
-    for (let r = 0; r < rowTrial.length; r++)
-      if (VH.trialSet.has(rowTrial[r]))
-        cx.fillRect(pr.area.x0 - 8, pr.Y(r) - 1.5, 6, 3);
-  }
   cx.restore();
   CAP.ras.textContent = 'Click a trial row to see every unit on that trial. '
     + 'Within each direction, trials run from 1 Hz at the top to 15 Hz at the '
-    + 'bottom (faint lines). Rows marked ▸ also have raw voltage.';
+    + 'bottom (faint lines). Every trial has raw voltage.';
 
   const mm = [];
   for (let c=0;c<NC;c++) mm.push(unitStat(i,c));
@@ -1014,7 +1010,8 @@ function drawTrial(){
  * and are served next to this page as volt.bin. The header comes down in one
  * small ranged GET and each trial in another, so nothing loads until asked.
  */
-const VOLT_URL = '__VOLT_URL__';
+const VOLT_INDEX = '__VOLT_INDEX__';
+const VOLT_TAG = '__VOLT_TAG__';
 let VH = null, VBUF = new Map(), VPEND = null, VZOOM = null;
 
 /** Ranged GET that survives a server which ignores Range.
@@ -1022,15 +1019,15 @@ let VH = null, VBUF = new Map(), VPEND = null, VZOOM = null;
  *  offset into that returns the file header instead of the data -- which looks
  *  like plausible noise rather than an error. Detect it and slice locally,
  *  keeping the full buffer so we only pay for it once. */
-let VFULL = null;
+const VFULL = new Map();
 async function rangeFetch(url, start, end){
-  if (VFULL) return VFULL.slice(start, end + 1);
+  if (VFULL.has(url)) return VFULL.get(url).slice(start, end + 1);
   const r = await fetch(url, {headers:{Range:`bytes=${start}-${end}`}});
   const buf = await r.arrayBuffer();
   const want = end - start + 1;
   if (r.status === 206 && buf.byteLength === want) return buf;
   if (buf.byteLength > want){          // Range ignored: whole file came back
-    VFULL = buf;
+    VFULL.set(url, buf);
     return buf.slice(start, end + 1);
   }
   throw new Error(`range ${start}-${end}: got ${buf.byteLength} bytes, `
@@ -1039,10 +1036,7 @@ async function rangeFetch(url, start, end){
 
 async function ensureVoltHeader(){
   if (VH) return VH;
-  const buf = await rangeFetch(VOLT_URL, 0, 16383);
-  const hlen = new DataView(buf).getUint32(0, true);
-  if (hlen + 4 > buf.byteLength) throw new Error('volt.bin header too large');
-  VH = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hlen)));
+  VH = await (await fetch(VOLT_INDEX)).json();
   VH.trialSet = new Set(VH.trials);
   // channels sorted by depth, for the image's y axis
   VH.order = VH.colDepth.map((d,i)=>[d,i]).filter(p=>p[0]!==null)
@@ -1064,9 +1058,10 @@ async function loadVoltTrial(j){
   await ensureVoltHeader();
   if (!VH.trialSet.has(j)) return null;
   if (VBUF.has(j)) return VBUF.get(j);
-  const off = VH.offsets[String(j)], len = VH.blockBytes;
-  const a = new Int8Array(await rangeFetch(VOLT_URL, off, off + len - 1));
-  if (a.length !== len) throw new Error('bad read from volt.bin: ' + a.length);
+  const [shard, off] = VH.offsets[String(j)], len = VH.blockBytes;
+  const url = VH.shards[shard] + VOLT_TAG;
+  const a = new Int8Array(await rangeFetch(url, off, off + len - 1));
+  if (a.length !== len) throw new Error('bad read from ' + url + ': ' + a.length);
   if (VBUF.size > 5) VBUF.delete(VBUF.keys().next().value);
   VBUF.set(j, a);
   return a;
@@ -1184,7 +1179,18 @@ function requestVolt(){
                   });
 }
 
-function redraw(){ drawSummary(); drawMatrix(); drawUnit(); drawTrial(); drawVolt(); }
+function updateTrialLabel(){
+  const el = document.getElementById('trial-label');
+  if (!el) return;
+  el.textContent = state.trial === null ? ''
+    : `trial ${state.trial} — ${H.condNames[A.cond[state.trial]]}, `
+      + `${A.tf[state.trial]} Hz` + (state.rowTrial
+          ? ` (row ${state.rowTrial.indexOf(state.trial)+1} of ${state.rowTrial.length})`
+          : '');
+}
+
+function redraw(){ drawSummary(); drawMatrix(); drawUnit(); drawTrial(); drawVolt();
+                   updateTrialLabel(); }
 
 /* ---------------------------------------------------------- interaction */
 function local(plot, ev){
@@ -1253,21 +1259,36 @@ function initPanels(){
     if (row < 0 || row >= state.rowTrial.length) return;
     state.trial = state.rowTrial[row];
     VZOOM = null;
-    drawTrial(); drawVolt(); requestVolt();
+    drawTrial(); drawVolt(); requestVolt(); updateTrialLabel();
   });
 
-  document.getElementById('btn-volt').addEventListener('click', async () => {
-    await ensureVoltHeader();
-    if (state.unit === null){
-      CAP.volt.textContent = 'pick a direction and a unit first';
-      return;
-    }
-    // prefer a snippet trial in the direction currently being viewed
-    let pick = VH.trials.find(j => A.cond[j] === state.cond);
-    if (pick === undefined) pick = VH.trials[0];
-    state.trial = pick;
+  // Row-precise selection by clicking is hopeless with ~600 rows in 250 px,
+  // so give the keyboard-free equivalent: step or jump between trials.
+  function gotoTrial(j){
+    if (state.rowTrial === null) return;
+    const row = state.rowTrial.indexOf(j);
+    if (row < 0) return;
+    state.trial = j;
     VZOOM = null;
-    drawUnit(); drawTrial(); drawVolt(); requestVolt();
+    drawUnit(); drawTrial(); drawVolt(); requestVolt(); updateTrialLabel();
+  }
+  function stepTrial(d){
+    if (state.rowTrial === null) return;
+    const cur = state.trial === null ? -1 : state.rowTrial.indexOf(state.trial);
+    let row = cur < 0 ? 0 : cur + d;
+    row = Math.max(0, Math.min(state.rowTrial.length - 1, row));
+    gotoTrial(state.rowTrial[row]);
+  }
+  document.getElementById('btn-prev').addEventListener('click', () => stepTrial(-1));
+  document.getElementById('btn-next').addEventListener('click', () => stepTrial(1));
+  document.getElementById('btn-rand').addEventListener('click', () => {
+    if (state.rowTrial === null) return;
+    gotoTrial(state.rowTrial[(Math.random() * state.rowTrial.length) | 0]);
+  });
+  window.addEventListener('keydown', ev => {
+    if (ev.target && /INPUT|SELECT|TEXTAREA/.test(ev.target.tagName)) return;
+    if (ev.key === 'ArrowLeft'){ stepTrial(-1); ev.preventDefault(); }
+    if (ev.key === 'ArrowRight'){ stepTrial(1); ev.preventDefault(); }
   });
 
   // Scroll to zoom the voltage panel, anchored under the pointer.
@@ -1352,6 +1373,14 @@ def main():
              * 255).round().astype(np.uint8)
         return base64.b64encode(a.tobytes()).decode()
 
+    def voltTag():
+        # One cache-busting suffix for every shard: they are always rebuilt
+        # together, so hashing volt.json is enough to version the set.
+        f = os.path.join(HERE, 'web', 'volt.json')
+        if not os.path.exists(f):
+            return ''
+        return '?v=' + hashlib.sha1(open(f, 'rb').read()).hexdigest()[:10]
+
     def tag(name):
         f = os.path.join(HERE, 'web', name)
         if not os.path.exists(f):
@@ -1365,7 +1394,8 @@ def main():
             .replace('__ANALYSIS__', ANALYSIS)
             .replace('__PLOT__', PLOT)
             .replace('__PANELS__', PANELS)
-            .replace('__VOLT_URL__', tag('volt.bin'))
+            .replace('__VOLT_INDEX__', tag('volt.json'))
+            .replace('__VOLT_TAG__', voltTag())
             .replace('__DATA_URL__', tag('data.bin'))
             .replace('__MAGMA__', lut('magma'))
             .replace('__RDBU__', lut('RdBu_r')))

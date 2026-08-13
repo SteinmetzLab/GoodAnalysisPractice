@@ -57,6 +57,10 @@ down each block.
 | lower | that trial: all 110 units by depth on the probe | — |
 | bottom | the **raw voltage** for that trial, with a dot on every sorted spike | scroll to zoom |
 
+**Every trial has raw voltage.** Hitting an exact row is hopeless with ~600
+rows in 250 px, so there are **previous / next / random trial** buttons, left
+and right arrow keys, and a label telling you which trial you are looking at.
+
 Rows in the units × time panel are ordered **by depth, not by response** —
 sorting by response would manufacture a diagonal, which is what
 [`nb3`](../nb3) is about.
@@ -74,12 +78,16 @@ there took three things:
 Allen's S3 bucket sends no `Access-Control-Allow-Origin` header, so a browser
 can neither stream it nor read it cross-origin. The file is flat
 channel-interleaved int16, though, so a time window is contiguous bytes:
-[`build_voltage.py`](build_voltage.py) pulls 40 windows — one per direction ×
-temporal frequency — with ranged GETs, high-passes at 300 Hz, common-average
-references, quantises to int8 and writes `web/volt.bin` (22 MB). The page then
-range-requests **one 0.5 MB slice per trial**. Rows marked with a blue tick in
-the trial raster have a snippet; the *jump to a trial with raw voltage* button
-goes to one.
+[`build_voltage.py`](build_voltage.py) pulls a 200 ms window for **every one of
+the 598 trials** with ranged GETs (3.3 GB off S3, about 90 s at 7.5 trials/s),
+high-passes at 300 Hz, common-average references, quantises to int8, and writes
+nine ~40 MB shards plus a small `volt.json` offset table. The page
+range-requests **one 0.5 MB slice per trial**, so a visitor downloads only what
+they actually click.
+
+Sharding is not cosmetic. 323 MB in a single file is awkward to host and
+impossible to put in git; ~40 MB pieces are neither. The shards are
+**gitignored** and rebuilt by this script — `volt.json` is committed.
 
 **2. Aligning the clocks.** Probe samples and NWB spike times live on different
 clocks, related through barcode pulses recorded on both
@@ -133,8 +141,13 @@ Fetch them anonymously — no AllenSDK, no credentials:
 curl -o session_732592105.nwb https://allen-brain-observatory.s3.us-west-2.amazonaws.com/visual-coding-neuropixels/ecephys-cache/session_732592105/session_732592105.nwb
 ```
 
-`web/data.bin` (3 MB) and `web/volt.bin` (22 MB) **are** committed, so the page
-can be rebuilt and redeployed without any of that.
+`web/data.bin` (3 MB) and `web/volt.json` (14 KB) **are** committed. The nine
+voltage shards (323 MB) are not: `build_voltage.py` rebuilds them in about two
+minutes, and `netlify deploy` takes ~4 minutes to push them.
+
+> **Deploy from `allen_drilldown/web`, never from the repo root.**
+> `netlify deploy --dir` ignores `.gitignore`, so pointing it at the repo root
+> uploads `_refs/` and everything else along with it.
 
 ## Two things that bit me, in case they bite you
 
