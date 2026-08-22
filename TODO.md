@@ -49,7 +49,7 @@ pick conceptually distinct ones rather than variants of the same idea.
 
 ## Improvements to existing material
 
-- **Real pupil trace in `nb4_walkthrough`.** Section 5 currently correlates
+- **Real pupil trace in `nonsenseCorr_walkthrough`.** Section 5 currently correlates
   neurons against a *simulated* slow pupil trace. Pull a real pupil-diameter
   trace from an Allen Institute dataset (Visual Coding or Visual Behavior
   Neuropixels, via the AllenSDK) and use that instead: the nonsense correlations

@@ -7,8 +7,12 @@ __pycache__/
 .ipynb_checkpoints/
 .virtual_documents/
 
-# Stale/orphan data file from an earlier version of nb2
-nb2/data/spikes.npz
+# Stale/orphan data file from an earlier version of nb2 (folder since renamed);
+# nothing loads it. Kept on disk, kept out of git.
+nb2-TuningChange/data/spikes.npz
+
+# Local Claude Code session config
+.claude/
 
 # OS / editor
 .DS_Store

@@ -109,7 +109,7 @@ harder:
 contrast, side, reaction time and block. The drill-down could branch on
 *behaviour*, not just stimulus identity — a much richer teaching object than
 A/B/C. IBL is also the better fit if you want the demo to connect to the
-pseudosession/block material already in `nb4_walkthrough`.
+pseudosession/block material already in `nonsenseCorr_walkthrough`.
 
 **Recommendation:** Allen for the web version, IBL if you want behaviour.
 

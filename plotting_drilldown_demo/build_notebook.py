@@ -47,7 +47,7 @@ and fill in as you go. Clicking higher up clears everything below, so you can
 never be looking at a mismatched set of panels.
 
 > Needs `ipympl` (`pip install ipympl`) for the interactive canvas — the same
-> dependency as `nb4_walkthrough`. With the default inline backend the figure
+> dependency as `nonsenseCorr_walkthrough`. With the default inline backend the figure
 > renders once as a static image and clicking does nothing.
 """)
 
