@@ -25,6 +25,7 @@ or held-out data before it is believed.
 | [`nb6-EventResponse/`](nb6-EventResponse) | A population PSTH response to an event: +9%, onset in the first post-event bin, p≈9e-19 | Averaging per-unit ratios is biased upward (Jensen), *and* a baseline-normalized PSTH pins its own baseline to exactly 1, so the bias arrives disguised as an onset |
 | [`nb7-ConditionAvsB/`](nb7-ConditionAvsB) | 400 neurons fire more on condition A (p≈2e-12) | Pseudo-replication: 4 session-level coin flips copied 100 times each. The unit of analysis is the session, not the neuron, and more sessions never fix it |
 | [`nb8-RegionRates/`](nb8-RegionRates) | Region A fires at half the rate of region B (10 vs 140 units, p=0.009) | A t-test on strongly skewed data with very unequal group sizes. A small sample misses the heavy tail, so its mean *and* its SD come out low together, and Welch's t-test reads the small SD as precision |
+| [`nb9-PairedChange/`](nb9-PairedChange) | A manipulation has no effect on firing (paired t-test, p=0.63) | The opposite failure: a real 20% suppression in 32 of 40 units, missed. The effect is multiplicative and rates are lognormal, so the mean difference in spikes/s is a rate-weighted average with an effective n of 10 |
 
 ## Walkthroughs
 
