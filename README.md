@@ -34,7 +34,7 @@ Not every topic works as a mystery. These are guided demos meant to be run
 
 | Folder | Topic |
 |--------|-------|
-| [`nonsenseCorr_walkthrough/`](nonsenseCorr_walkthrough) | Nonsense correlations from slow fluctuations: 79/100 neurons "significantly" correlated with pupil and 81% block decoding, from neurons generated independently of both — which controls catch it (circular shift, session permutation, pseudosessions, block hold-out) and which only appear to (trial shuffling); the effective sample size that explains it; a positive control showing the good tests still have power; and a sweep over the fluctuation timescale |
+| [`nonsenseCorr_walkthrough/`](nonsenseCorr_walkthrough) | Nonsense correlations from slow fluctuations: 79/100 neurons "significantly" correlated with pupil and 83% block decoding, from neurons generated independently of both — which controls catch it (circular shift, session permutation, pseudosessions, block hold-out) and which only appear to (trial shuffling); the effective sample size that explains it; a positive control showing the good tests still have power; and a sweep over the fluctuation timescale |
 
 ## Interactive demos
 

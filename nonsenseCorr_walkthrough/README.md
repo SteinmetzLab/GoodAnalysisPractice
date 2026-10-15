@@ -1,117 +1,101 @@
-# nb4 walkthrough — Nonsense correlations from slow fluctuations
+# Walkthrough: Nonsense correlations from slow fluctuations
 
 A **guided demo to run together with a class**, not a mystery to solve. It is the
-same pitfall as [`nb4-BlockDecoding/`](../nb4-BlockDecoding) (slow drift + a slowly-varying target defeats
-ordinary statistics), extended to cover the pupil-correlation version of the
-problem and to contrast controls that work with controls that only look like
-they work.
+same pitfall as [`nb4-BlockDecoding/`](../nb4-BlockDecoding) (slow drift plus a
+slowly varying target defeats ordinary statistics), extended to cover the
+pupil-correlation version of the problem and to contrast controls that work with
+controls that only look like they work.
 
 Everything is simulated in the notebook: 100 neurons whose firing rates fluctuate
 slowly (25 s timescale) around their own mean rate, spike trains drawn as an
 inhomogeneous Poisson process, 1 s trials, a pupil trace with the same kind of
-slow structure, and a block variable that flips every 30-70 trials. **The neurons
-are generated independently of both the pupil and the block.**
+slow structure, and a block variable that flips every 30 to 70 trials. **The
+neurons are generated independently of both the pupil and the block.**
+
+This version was developed for the Summer Workshop on the Dynamic Brain 2026 by
+Nick Steinmetz and Carrie Stine. The SWDB copy lives in
+[AllenSWDB/SWDB_2026_Good_Analysis](https://github.com/AllenSWDB/SWDB_2026_Good_Analysis/tree/main/code/Workshop-2_NonsenseCorrelations).
+The earlier version it replaces (`notebook4_walkthrough.ipynb`, built by
+`build_notebook.py`, which also had a Rastermap section) is in this repo's git
+history at commit `50828b4`.
 
 ## Files
-- `notebook4_walkthrough.ipynb` — the whole thing (data generation included).
-- `build_notebook.py` — rebuilds and re-executes it.
+- `nonsenseCorr_walkthrough.ipynb`: the notebook (data generation included). It
+  contains short exercises with `_____` blanks; their cells are committed without
+  outputs.
+- `workshop2_utils.py`: helper functions the notebook imports.
+- `resources/`: two diagrams of the circular-shift control.
 
-## Sections
-1. Simulate a session (all parameters at the top, including `TP_NOISE_SD`)
-2. Spike rasters
-3. Spike counts binned by trial
-4. The same matrix sorted by Rastermap — apparent structure, no cross-validation
-   — then two ways to cross-validate the sort: an **interleaved** odd/even split
-   (the structure replicates, because neighbouring trials share the same slow
-   fluctuation) versus a **contiguous** half split (it does not)
-5. **Test 1** — correlate each neuron with pupil diameter; histogram of *r* with
-   the significant bars in red; histogram of *p*; matrix sorted by *r*; a
-   clickable panel that overlays any neuron on the pupil trace
-6. A control that **fails**: shuffle each neuron's timecourse
-7. Controls that **work**: circular shift; another session's pupil trace
-8. **How many independent samples do you actually have?** — Bartlett's effective
-   *n* from the two autocorrelations, cross-checked against the width of the
-   circular-shift null, and the honest correlation threshold that follows
-9. **Test 2** — decode the block variable with ordinary k-fold CV; one fold shown
-   with 90% training trials in black and the held-out 10% in green/red
-10. The same failing control: shuffle each neuron's timecourse
-11. Controls that **work**: pseudosessions; leave-one-block-out
-12. **Do these controls still find real effects?** — 20 neurons given a genuine
-    pupil drive (power vs. false positives for all three tests, as a function of
-    effect size), and a population given genuine block coding
-13. **How bad is it, as a function of the fluctuation timescale?** — both tests
-    swept over timescales from 1 s to 50 s
+## Parts
+1. **Simulating null data**: simulate a session, spike rasters, spike counts
+   binned by trial.
+2. **Correlation with pupil diameter**: per-neuron correlation, a clickable
+   matrix that overlays any neuron on the pupil trace, the shuffle control (fails),
+   circular shift and another session's pupil trace (work), and the effective
+   number of independent samples.
+3. **Decoding the block variable**: ordinary k-fold cross-validation, the shuffle
+   control (fails), pseudosessions and leave-one-block-out (work).
+4. **Detection of true effects**: do the good controls still find real pupil and
+   block effects?
+5. **Severity across timescales**: both tests swept over fluctuation timescales
+   from 1 s to 50 s.
 
 ## Realized numbers (seed 7, 511 trials)
 | | result |
 |---|---|
-| Rastermap sort, mean correlation of adjacent neurons — held-out **even** trials | **+0.345** (fit +0.374; all pairs +0.004) |
-| the same, held-out **second half** | **+0.088** (fit +0.379; all pairs +0.005) |
 | critical \|r\| for p<0.05 at n=511 | 0.087 |
 | neurons "significantly" correlated with pupil (p<0.05) | **79 / 100** |
 | after shuffling trials | 7 / 100 |
 | vs circular-shift null | 4 / 100 |
 | vs session-permutation null | 8 / 100 |
-| effective *n* (Bartlett, median over neurons) | **21** — and 15 from 1/var of the circular-shift null |
-| honest \|r\| threshold at n=21 | **0.429** → 9 / 100 neurons significant |
-| block decoding, trial-wise CV | **81.4%** |
-| trial-wise CV on shuffled data | 50.0% ± 2.2% |
-| pseudosession null | 80.4% ± 3.9% (p = 0.45) |
-| leave-one-block-out CV | 10.3% (i.e. *worse* than chance) |
+| effective *n* (Bartlett, median over neurons) | **21**, and 15 from 1/var of the circular-shift null |
+| honest \|r\| threshold at n=21 | **0.429**, giving 9 / 100 neurons significant |
+| block decoding, trial-wise CV | **82.8%** |
+| trial-wise CV on shuffled data | 50.4% ± 2.6% |
+| pseudosession null | 81.9% ± 3.7% (p = 0.60) |
+| leave-one-block-out CV | 7.3% (i.e. *worse* than chance) |
 
-### Positive control (section 12)
-With the 20 target neurons made fully pupil-locked, **all three tests find 20/20**
-— but the parametric test also flags **71%** of the 80 untouched neurons, while the
-circular-shift and session-permutation tests flag **5%**. Power ramps up with
-effect size: the good controls reach ~50% detection when about 60% of a neuron's
-slow modulation is pupil-locked, i.e. they are conservative, not blind.
+### Real block coding (Part 4)
+| block coding strength (spikes/s) | 0 | 0.25 | 0.5 | 1.0 | 1.5 |
+|---|---|---|---|---|---|
+| trial-wise CV | 82.6% | 83.0% | 89.8% | 99.4% | 100% |
+| leave-one-block-out | 6.4% | 7.0% | 15.2% | 75.2% | 96.3% |
+| pseudosession p | 0.32 | 0.37 | 0.024 | 0.024 | 0.024 |
 
-For the block: leave-one-block-out climbs 9% → 21% → 78% → 97% as the real coding
-strength goes 0 → 0.5 → 1.0 → 1.5 spikes/s, and the pseudosession test leaves its
-own null band at 0.5 spikes/s — where leave-one-block-out is still reporting 21%,
-i.e. worse than chance. Pseudosessions are the more sensitive of the two.
+With 40 pseudosessions the smallest possible p is 1/41 = 0.024, so the
+pseudosession test is at its floor from 0.5 spikes/s onward, where
+leave-one-block-out is still reporting worse than chance.
 
-### Timescale sweep (section 13, 3 datasets per point)
+### Timescale sweep (Part 5, 3 datasets per point)
 | fluctuation timescale | 1 s | 4 s | 8 s | 16 s | 50 s |
 |---|---|---|---|---|---|
 | neurons "correlated with pupil" | 22% | 53% | 62% | 71% | **81%** |
-| trial-wise CV | 65% | 82% | **88%** | 86% | 59% |
-| leave-one-block-out | 42% | 32% | 23% | 7% | 2% |
+| trial-wise CV | 67% | 84% | **90%** | 88% | 58% |
+| leave-one-block-out | 40% | 31% | 22% | 5% | 1% |
 
 The pupil false-positive rate climbs monotonically. The decoding artifact appears
 as soon as the fluctuation outlasts a few trials and is **largest at intermediate
-timescales**, so "our drift is very slow" is not a defence. Leave-one-block-out
-never claims coding at any timescale.
+timescales**, so "our drift is very slow" is not a defense.
 
 ## The point of the shuffle control
 Permuting trials removes the slow autocorrelation that generated the effect, so
 it tests a hypothesis nobody proposed. It comes out at chance, which makes the
 original result look validated. A useful null has to preserve the temporal
 structure of the data and only break its *alignment* with the variable of
-interest — that is what the circular shift, the session permutation, the
+interest. That is what the circular shift, the session permutation, the
 pseudosessions and the block hold-out all do.
 
 ## Requirements
-Beyond the base environment: `rastermap` (section 4) and `ipympl` (the clickable
-figure in section 5). Both are in `../environment.yml`.
-
-```bash
-conda activate goodanalysis
-python build_notebook.py       # regenerate + re-execute
-```
+The base environment plus `ipympl` for the clickable figure in Part 2. Both are
+covered by `../environment.yml` (`jupyter` brings in `ipywidgets`).
 
 The clickable figure needs a live kernel and uses `%matplotlib widget`. In the
 committed notebook it appears as a static PNG; re-run the cell to make it
 interactive. The cell right after it switches back to `%matplotlib inline`.
 
-Running the whole notebook top to bottom takes about **4 minutes**. Almost all of
-it is LDA refits: section 11a (100 pseudosessions), 12b (5 coding strengths x 40
-pseudosessions) and 13 (7 timescales x 3 datasets). Lower `N_PSEUDO`,
-`N_PSEUDO_SWEEP` and `N_REP` if you need it faster in front of a class.
+Running the whole notebook top to bottom takes about 25 s on an Apple M3 Max.
 
-## Note for later
-Section 5 uses a **simulated** pupil trace. Swapping in a real pupil trace from
-an Allen Institute dataset (Visual Coding / Visual Behavior Neuropixels) would
-make the point harder to dismiss — a real behavioral signal has the same slow
-structure and the same nonsense correlations follow. Also tracked in
-[`../TODO.md`](../TODO.md).
+## License note
+The notebook, `workshop2_utils.py` and `resources/` come from
+AllenSWDB/SWDB_2026_Good_Analysis, which is released under the MIT License,
+Copyright (c) 2023 Allen Institute for Neural Dynamics. The full license text is in `LICENSE_AllenSWDB`.
